@@ -6,6 +6,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
   return {
+    // Relative, so the build works at a domain root and under a repository
+    // subpath (GitHub Pages serves this one from /CLM-POC/) without a rebuild.
+    base: './',
     plugins: [react()],
     server: {
       proxy: {

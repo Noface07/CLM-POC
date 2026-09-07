@@ -24,7 +24,10 @@ export function openPdf(b64, filename) {
 }
 
 async function textFromBytes(bytes) {
-  const pdf = await pdfjsLib.getDocument({ data: bytes, standardFontDataUrl: "/standard_fonts/" }).promise;
+  // Relative to the deployed base, not the domain root: on GitHub Pages the app is
+  // served from a subpath, and "/standard_fonts/" would look outside it.
+  const standardFontDataUrl = `${import.meta.env.BASE_URL}standard_fonts/`;
+  const pdf = await pdfjsLib.getDocument({ data: bytes, standardFontDataUrl }).promise;
   let fullText = "";
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
