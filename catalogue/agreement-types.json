@@ -1,0 +1,155 @@
+{
+  "$comment": [
+    "P2.8: agreement types and template catalogue, as a default for Facilities Management.",
+    "",
+    "THIS IS A STARTING POINT, NOT A DECISION. No client has reviewed it. It exists so Phase 1 can",
+    "be built against something concrete rather than waiting, and so the conversation with a client",
+    "is 'change these' rather than 'what do you need', which is a much easier conversation to have.",
+    "",
+    "Every row is tenant-editable configuration (P0-D4). Nothing here is compiled into the product:",
+    "a tenant that needs a fifteenth agreement type adds one, and a tenant that never uses framework",
+    "agreements deactivates that one.",
+    "",
+    "riskLevel drives the low-touch path: a low-risk type is one of its four preconditions",
+    "(blueprint 6.2). It is deliberately conservative here: the cost of routing a simple NDA through",
+    "review is an hour of somebody's time, and the cost of auto-approving a TFM contract is a",
+    "multi-year commitment nobody read.",
+    "",
+    "FAMILY groups the fourteen types into the five kinds of paper an FM team actually handles:",
+    "framework and master agreements, service delivery contracts, project and supply work, legal",
+    "and compliance instruments, and lifecycle documents that amend or end something else.",
+    "",
+    "It exists because the type name answers 'what is this contract about' and not 'what kind of",
+    "document am I holding', and a person triaging a queue needs the second question answered",
+    "first. An NDA and a five-year TFM agreement are both 'contracts' and nothing else about them",
+    "is alike."
+  ],
+  "agreementTypes": [
+    {
+      "code": "msa",
+      "name": "Master Services Agreement",
+      "family": "Framework and master",
+      "riskLevel": "high",
+      "why": "The umbrella every call-off hangs from. Its liability and indemnity terms govern work nobody has scoped yet, which is what makes it the highest-risk document in the estate.",
+      "typicalTerm": "3 years",
+      "requiresSchedules": true
+    },
+    {
+      "code": "tfm",
+      "name": "Total Facilities Management Agreement",
+      "family": "Service delivery",
+      "riskLevel": "high",
+      "why": "One supplier takes the whole estate. Highest value, longest term, and the hardest to exit: a failed TFM contract is an operational emergency, not a procurement problem.",
+      "typicalTerm": "5 years",
+      "requiresSchedules": true
+    },
+    {
+      "code": "hard_fm",
+      "name": "Hard FM Services Agreement",
+      "family": "Service delivery",
+      "riskLevel": "high",
+      "why": "Mechanical, electrical, plumbing, fire and lifts. Statutory compliance sits here: a lapse in fire or lift inspection is a criminal liability for the client, not just a service failure.",
+      "typicalTerm": "3 years",
+      "requiresSchedules": true
+    },
+    {
+      "code": "soft_fm",
+      "name": "Soft FM Services Agreement",
+      "family": "Service delivery",
+      "riskLevel": "medium",
+      "why": "Cleaning, catering, security, waste, grounds. Lower statutory exposure than hard FM, but the largest headcount, which is why TUPE almost always applies.",
+      "typicalTerm": "3 years",
+      "requiresSchedules": true
+    },
+    {
+      "code": "ppm",
+      "name": "Planned Preventive Maintenance Agreement",
+      "family": "Service delivery",
+      "riskLevel": "medium",
+      "why": "Scheduled maintenance to a written regime. Medium rather than low because the schedule is the compliance evidence: if the regime is wrong, every visit against it is wrong.",
+      "typicalTerm": "1 year",
+      "requiresSchedules": true
+    },
+    {
+      "code": "reactive",
+      "name": "Reactive Maintenance Call-Off",
+      "family": "Service delivery",
+      "riskLevel": "medium",
+      "why": "Called off against agreed rates when something breaks. The risk is not the individual job, it is that unpriced work accumulates past any approval threshold one call-off at a time.",
+      "typicalTerm": "1 year",
+      "requiresSchedules": false
+    },
+    {
+      "code": "framework",
+      "name": "Framework Agreement",
+      "family": "Framework and master",
+      "riskLevel": "high",
+      "why": "Several suppliers, no committed volume. High because it sets the terms for everything called off under it, often for years, and is frequently signed before anyone knows what will be bought.",
+      "typicalTerm": "4 years",
+      "requiresSchedules": true
+    },
+    {
+      "code": "sow",
+      "name": "Statement of Work",
+      "family": "Projects and supply",
+      "riskLevel": "low",
+      "why": "Scoped work under an existing MSA. Low only because the MSA already carries the liability and indemnity terms: a SOW with no parent agreement is not low risk and must not use this type.",
+      "typicalTerm": "project",
+      "requiresSchedules": false
+    },
+    {
+      "code": "equipment_supply",
+      "name": "Equipment Supply and Installation",
+      "family": "Projects and supply",
+      "riskLevel": "medium",
+      "why": "Plant and equipment with installation. Title, warranty and defects liability matter more here than service levels, and the warranty usually outlives the installer's involvement.",
+      "typicalTerm": "project",
+      "requiresSchedules": true
+    },
+    {
+      "code": "consultancy",
+      "name": "Consultancy and Professional Services",
+      "family": "Projects and supply",
+      "riskLevel": "medium",
+      "why": "Advice rather than labour: surveys, design, compliance audits. The exposure is professional indemnity and who owns the deliverable, not service credits.",
+      "typicalTerm": "project",
+      "requiresSchedules": false
+    },
+    {
+      "code": "nda",
+      "name": "Non-Disclosure Agreement",
+      "family": "Legal and compliance",
+      "riskLevel": "low",
+      "why": "Signed before anything else, usually in volume, usually on our paper. The genuine low-touch case: standard wording, no value, no service obligation.",
+      "typicalTerm": "2 years",
+      "requiresSchedules": false
+    },
+    {
+      "code": "dpa",
+      "name": "Data Processing Agreement",
+      "family": "Legal and compliance",
+      "riskLevel": "high",
+      "why": "Where a supplier processes personal data: access control, CCTV, visitor management, occupancy analytics. High because the terms are largely non-negotiable in law and getting them wrong is a regulatory exposure rather than a commercial one.",
+      "typicalTerm": "matches parent",
+      "requiresSchedules": true
+    },
+    {
+      "code": "variation",
+      "name": "Variation Agreement",
+      "family": "Contract lifecycle",
+      "riskLevel": "medium",
+      "why": "Amends an existing contract. The risk is not the change but the drift: a chain of small variations can move a contract a long way from what was approved, and each one looks small.",
+      "typicalTerm": "matches parent",
+      "requiresSchedules": false
+    },
+    {
+      "code": "termination",
+      "name": "Termination and Settlement Agreement",
+      "family": "Contract lifecycle",
+      "riskLevel": "high",
+      "why": "Ends a relationship and settles what is owed. High because it is usually drafted under pressure, waives rights permanently, and is the document most likely to be read by a court.",
+      "typicalTerm": "one-off",
+      "requiresSchedules": false
+    }
+  ]
+}

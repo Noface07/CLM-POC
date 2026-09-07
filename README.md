@@ -1,0 +1,295 @@
+# FM Supplier CLM demo
+
+A working contract lifecycle demo for facilities management: draft a contract from the catalogue,
+negotiate it as a Word document with tracked changes, decide each change against the clause
+playbook, sign it, and track the obligations that fall out of the signed PDF.
+
+```bash
+npm install
+npm run dev           # http://localhost:5173
+npm run selftest      # 219 checks over the engines below
+npm run export:docx   # write the catalogue out as Word documents
+npm run lint
+```
+
+No backend and no account needed. Everything runs in the browser.
+
+## The four tabs
+
+| Tab | What it is |
+| --- | --- |
+| **Dashboard** | Lifecycle distribution, open exceptions by playbook band, renewal runway, value by category, all computed from the contracts the current role can see. |
+| **Contracts** | The list, role-filtered, with a column saying *why* each row is visible to you. |
+| **Contract workspace** | The lifecycle chevron, the document with its tracked changes and comments, internal review, and the AI panel. |
+| **Obligations** | Extracted from the executed PDF by pdf.js, advisory until a human validates each row. |
+
+## The claim that matters: the document is real
+
+The contract is a **Word document from drafting to signature, and a PDF only once executed.** That
+is not a presentation choice: a PDF cannot carry a tracked change, and a signed contract should not
+be editable.
+
+- `src/lib/docx.js` writes genuine OOXML: `<w:ins>` and `<w:del>` with author and date,
+  `word/comments.xml` with anchored ranges, and a VML watermark in the page header. A file
+  downloaded from the demo opens in Word with the changes and comments live and acceptable.
+- `src/lib/zip.js` is the ZIP writer that makes that possible: stored entries only, about sixty
+  lines, no compression dependency.
+- `src/lib/pdf.js` reads PDFs with pdf.js and writes the one PDF this app produces. Obligation
+  extraction parses the bytes of the PDF the demo itself generated at execution, so a term changed
+  during negotiation shows up in the obligations.
+- `src/lib/redline.js` is a word-level LCS diff with a semantic-cleanup pass, so a rewritten
+  sentence reads as one strike-through plus one underline rather than a dozen alternating
+  fragments. Accepting a change adopts the insertion and drops the deletion; rejecting does the
+  reverse, and rejecting everything restores the draft byte for byte.
+- `src/lib/docx-import.js` reads a Word file the **counterparty** sends: `src/lib/unzip.js` inflates
+  the ZIP (`DecompressionStream`, no library), `src/lib/xml.js` parses the OOXML, and every
+  `w:ins`, `w:del` and comment anchor comes out with its author and date. The supplier tab accepts a
+  real upload; what it cannot read (tables, numbering, moved text) it lists rather than silently
+  dropping. A file returned with no revisions is refused, because Word with track changes switched
+  off produces a document that looks like agreement.
+
+## The claim that matters: the playbook decides
+
+AI change intelligence says *what moved*. On its own that is a summary. `src/lib/playbook.js` places
+the proposed term in its clause's three-position band and names who may approve it, which is the
+difference between a tool that reads contracts and one that moves them.
+
+Findings are **derived from the tracked changes**, not listed separately: a hardcoded finding list
+and a hardcoded redline drift apart the moment either is edited.
+
+Three things it deliberately does not do:
+
+- **Guess.** An unmatched finding returns nothing and the UI says the playbook is silent.
+- **Trust arithmetic alone.** A cap at 125% that also covers personal injury is inside the band and
+  still unacceptable. Red flags override a comfortable band placement.
+- **Decide where the band cannot.** Where standard and fallback carry the same number, the number is
+  not the variable, and the UI says so rather than inventing a verdict.
+
+The playbook is readable from a button in the header on every tab, and from every finding.
+
+### Cross-references: the finding a diff cannot produce
+
+Clause 7.4 says the indemnity is not subject to the cap in clause 7.2. The supplier edits 7.2 and
+leaves 7.4 alone. A review that reads the tracked changes sees a cap moving from 125% to 100%, a
+fallback-band concession, and cannot see that the same edit has just repriced an uncapped
+indemnity, because nothing in the diff of 7.2 contains that fact.
+
+`src/lib/crossref.js` builds the reference graph from the whole assembled document and pulls both
+directions into the review: what a clause points at, and **what points back at it**. The second is
+the half a paragraph-at-a-time review cannot have. Clauses whose meaning moved without their text
+changing are called out at the top of the AI panel, named in the finding that caused them, and
+included in the model's prompt context.
+
+### Comments
+
+The counterparty's comment on a clause appears inside the finding for that clause, because the band
+places the change and the comment carries the reason: *"our insurers will not support a cap above
+contract value"* is negotiating intelligence the band cannot see. Replies and resolution work from
+either the document margin or the finding.
+
+The panel is a list of rows and **one** detail view. A row answers the three questions triage asks:
+which clause, how bad, who decides, and carries Accept, because the verdict line above the button
+is what an accept is decided on. Everything else opens the exception dialog, which is the whole
+record: the AI's summary and the before-and-after, the playbook's verdict with its full band, the
+clauses that read with this one, the counterparty's comment thread, and the four decisions.
+
+There used to be an inline expansion *and* a dialog showing overlapping-but-different subsets of the
+same finding, so a reviewer could decide on whichever half was in front of them. There is now one.
+
+**The redline keeps its markup.** Deciding a change restyles it: an accepted insertion goes plain, a
+rejected one disappears, but the tracked changes stay on the v1.x tab as the negotiation record. The
+clean copy is the executed version, and nowhere else.
+
+**Requesting a revision produces a new version.** It is not a flag on a change: the counterparty
+returns fresh markup, the document moves to v1.2, and the finding is re-derived against what they
+actually sent. Watch clause 7.2: reinstating the personal-injury carve-out moves it from
+past-walk-away to inside the fallback band without the number changing at all.
+
+Comment threads run **both ways**. The counterparty can reply and resolve in their own view; they
+cannot decide tracked changes, because that is the paper owner's call. A thread one side cannot
+answer is a memo.
+
+The demo redline is written to land in **every** band position: one better than standard, two
+inside fallback, two past the walk-away line, one the band cannot place. A redline where everything
+is a walk-away makes the playbook look like a rejection machine and hides the case it exists for:
+the real concession that is still inside what we accept without escalation.
+
+**Resolving closes the conversation; accepting or rejecting decides the change.** They are separate
+states on purpose: a clause can have a settled argument and a pending edit, or an accepted edit with
+an argument still running underneath it.
+
+## Role-based access
+
+`src/lib/rbac.js` keeps two questions separate:
+
+1. **Which contracts can this role see?** Driven by routing. A contract routed to Legal appears in
+   Legal's list; one that was never routed to them does not. Legal additionally has standing
+   visibility of every high-risk agreement type: `CLM-2090` is one nobody routed to them, and it is
+   in the list to make the rule visible.
+2. **Which actions can this role take?** A role can read a contract and approve nothing on it.
+
+Switch role in the header and the list, the dashboard totals and the available actions all change.
+The count of what was filtered out is always stated: *"you have no access"* and *"there is nothing
+here"* are different answers.
+
+## Evergreen contracts
+
+A contract with no expiry is modelled as its own flag, not as a blank or far-future end date. A date
+the system treats as an expiry produces renewal reminders for something that never renews; a blank
+date with no flag is indistinguishable from missing data.
+
+Choosing evergreen at draft time swaps clause 4.1 for a rolling term, drops the end date from the
+document and the merge data, removes the expiry reminders and the renewal task, and moves the
+contract out of the runway chart into its own count on the dashboard. The playbook's
+`term_renewal.evergreenPosition` holds the position: what makes an evergreen contract safe is the
+termination notice, so that is the term to defend.
+
+## E-signature: Documenso
+
+`src/lib/documenso.js` talks to the real Documenso v2 API: `/envelope/create` (multipart),
+`/envelope/field/create-many`, `/envelope/distribute`, `/envelope/{id}`.
+
+**Is it free?** Self-hosted, yes: it is AGPL-3.0 and there is no licence cost. The hosted service
+has a free tier of 5 documents a month, then roughly $25/mo individual, $40/mo for a team of five.
+At real contract volume the choice is between paying for the hosted tier and paying for the
+infrastructure and maintenance of your own instance.
+
+Before sending, the signature page is a full envelope preparation step: recipients with names,
+emails, roles (signer, approver, viewer, CC) and signing order, the email subject and message, and a
+rendering of the exact final text that will be flattened into the PDF. Validation runs before the
+upload rather than after Documenso rejects it.
+
+Default mode is **simulated**: no key, no network, no account, and the demo runs end to end.
+Point it at a real instance in *Integration settings* on the signature page.
+
+Two caveats the UI states rather than hides: Documenso's hosted API sends no CORS headers a browser
+will accept, so `vite.config.js` proxies `/documenso` in dev (`VITE_DOCUMENSO_URL=https://…` for a
+self-hosted instance); and an API key typed into a browser is readable by anything on the page, so
+in production the call and the key belong on a backend.
+
+## The supplier portal, and what a link can do without a backend
+
+The supplier tab is a scoped external view: one contract, no contract list, no internal review, no
+playbook. It shows the tokenised access link a real portal would email
+(`#supplier?t=…&c=…`), and the link genuinely works: it opens straight into that view and the
+session survives a reload or a second tab, because the state is kept in `localStorage`.
+
+**It will not work on someone else's machine, and the panel says so.** With no backend there is
+nothing for another browser to fetch. In production the token would be a signed reference to a
+server-side session with an expiry, a revoke list and an audit entry for every open, which is also
+what makes it safe to email.
+
+## Signing
+
+Signing is a ceremony, not a boolean. **Both parties go through it**: there is no path that marks a
+party signed without them signing, and the envelope does not complete until every signer on it has.
+The **signing order is enforced** as well: a recipient's Sign button is disabled with an explanation
+until everyone ahead of them has signed, which is what Documenso enforces server-side.
+
+Every signer can be signed **from the signature page itself**, with a running `n of m signed` count.
+In production each signer gets their own link and only they can use it; the counterparty's own view
+is still there under *Supplier view*.
+
+Recipients are **people, not companies**: a company cannot sign, an authorised officer signs on its
+behalf, which is what the authority affirmation in the ceremony is about. The recipient list you
+edit before sending is the one that goes on the envelope.
+
+Each party sees what they are signing, **types their own full name into an empty field** (a name the
+system fills in is the system's assertion, a name the signer types is theirs), sets their title, and
+affirms both intent and authority.
+
+The typed name is rendered as a signature: a script face on screen and in Word, Times-Italic in the
+PDF, with a small `SIGNED ELECTRONICALLY` caption and the printed name, title, timestamp and method
+beneath it. The PDF uses a standard-14 face rather than an embedded script font on purpose: an
+unembedded script font substitutes to something arbitrary on the reader's machine, and the execution
+page is the last place you want a surprise.
+
+A name that differs from the one the envelope was addressed to is allowed and recorded as a
+difference, because people do sign under a fuller form of their name, and because that is also what
+the wrong person signing looks like.
+
+## Obligations: extraction over-produces, on purpose
+
+A model told to find every duty in a contract returns "comply with all applicable laws" next to
+"renew the insurance before the policy anniversary". Both are obligations; only one can generate a
+useful reminder. `src/lib/obligations.js` sorts them on whether a reminder is *possible*, which needs
+three things the model cannot invent: **a date or recurrence**, **a named owner**, and **a
+consequence for missing it**.
+
+Rows without all three are recorded and left off the schedule: a reminder nobody can act on trains
+people to ignore reminders, and the ones they then ignore are the insurance renewals. The demo
+extraction returns 11 obligations and schedules 5; the other 6 are one click away with the reason
+each was set aside.
+
+## After execution
+
+Extraction is a step. **Keeping the obligations is what the active phase of the lifecycle *is***,
+which is why the post-execution panel leads with obligation performance rather than treating it as a
+side task, and why validation progress is measured against what can be tracked rather than against
+everything extracted.
+
+The panel answers the four questions people actually have once a contract is signed: what is coming
+and when (key dates, with the notice deadline before the expiry date, because missing the first is
+what causes an unwanted renewal), are we performing, what has changed since signing, and can we get
+out. The last one does the arithmetic: notice served today runs its period and lands on a date, and
+the panel says whether that date is early enough to be worth the mobilisation, or past expiry, in
+which case terminating for convenience achieves nothing and the answer is to let it expire.
+
+### Amending
+
+An amendment has **its own lifecycle** before it touches the parent: drafted, internally reviewed,
+sent to the supplier, signed as its own instrument, and only then attached, at which point the
+parent version moves. A variation agreed by email and never executed leaves two parties operating on
+different terms and both believing they agreed; one that bumps the parent version before it is
+signed leaves the system asserting a contract that does not exist.
+
+### Terminating
+
+The effective date is **calculated from the notice period**, not typed: that arithmetic is the
+thing people get wrong, and getting it wrong means a contract that ends before the notice has run or
+one that runs a month longer than anyone budgeted for.
+
+"Termination in progress" is not a holding state: it is the notice period running, and the contract
+stays fully live throughout it: services continue, charges accrue, validated obligations keep
+firing. It completes when **both** the effective date has arrived **and** the closure checklist is
+done: transition assistance delivered, asset and compliance data handed back, access revoked, final
+invoice settled, surviving obligations re-homed. Marking a contract terminated the day notice is
+served is how a client ends up with no asset data and a supplier whose badges still work.
+
+## Layout
+
+```
+catalogue/            agreement types, templates, clause playbook: the source of truth, as JSON
+catalogue/docx/       the same, as Word documents (generated, see npm run export:docx)
+src/data/             imports the catalogue; template assembly; the contract portfolio
+src/lib/              zip, unzip, xml, docx, docx-import, pdf, redline, crossref,
+                      playbook, rbac, documenso, ai
+src/components/       the four tabs, the draft studio, the document viewer, the charts
+scripts/selftest.js   219 checks over all of the above
+scripts/export-catalogue.js   writes catalogue/docx/
+```
+
+## Where the templates and the playbook actually live
+
+The catalogue is JSON because JSON is what seeds a tenant: that is the right source of truth and
+the wrong thing to hand a lawyer. `npm run export:docx` produces the readable view: the playbook as
+a Word document, the two reference lists, and one assembled contract per template with every merge
+field showing as a highlighted `[placeholder]`.
+
+Every agreement type carries a **family** (framework and master, service delivery, projects and
+supply, legal and compliance, contract lifecycle) shown on the contract list, the workspace header
+and the draft picker. The type name says what a contract is about; the family says what kind of
+document it is, which is the question you answer first when triaging a queue.
+
+There are no hand-maintained `.docx` template files, and that is deliberate. The wording is
+assembled from the playbook's `standardWording` at generation time, so the document you send and the
+position you defend are the same sentence and cannot drift apart. Editing a Word file in
+`catalogue/docx/` changes nothing the system generates: change the JSON and re-export.
+
+## What is demo data and says so
+
+The clause wording is assembled from the playbook's standard positions, which **no lawyer has
+read**: the document says so on its face, and the catalogue README says so at length. The mock AI
+findings are derived from the real diff. The obligations produced without an API key are written
+against the clause numbers the templates assemble to. Live AI (any of Anthropic, OpenRouter or
+Gemini) is available behind the key icon for your own testing and is off by default.

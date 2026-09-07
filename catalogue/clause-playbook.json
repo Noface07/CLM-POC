@@ -1,0 +1,823 @@
+{
+  "$comment": [
+    "P2.8 / v0.3 section 5.4: the clause playbook.",
+    "",
+    "This is the file that turns AI output from a summary into a decision. Without it the system can",
+    "say 'the liability cap was changed from 125% to 100% of annual charges' and stop, leaving a",
+    "person to decide whether that matters. With it, the system says the same sentence and adds",
+    "'that is inside the fallback band, Contract Manager may approve', which is the difference",
+    "between a tool that reads contracts and one that moves them.",
+    "",
+    "THREE POSITIONS, AND THE THIRD IS WHAT MAKES THE OTHERS MEAN ANYTHING.",
+    "  standard:  our opening position",
+    "  fallback:  what we accept without escalation",
+    "  walkAway:  past this we do not sign",
+    "",
+    "A playbook with only a standard position produces one answer: 'this differs from standard',",
+    "which is true of every negotiated contract and tells nobody anything. The band is the content.",
+    "",
+    "NONE OF THIS HAS BEEN REVIEWED BY COUNSEL. The numbers are conventional for UK facilities",
+    "management and are here so the routing can be built and tested against something shaped like",
+    "the real thing. Every one is tenant configuration, per legal entity (P0-D4), and expected to",
+    "change. Treat them as a first draft to argue with, not as advice.",
+    "",
+    "NUMERIC BANDS. Where a position is a single comparable quantity it also carries standardValue,",
+    "fallbackValue, walkAwayValue, valueUnit and valueDirection, so a proposed term can be placed in",
+    "the band by arithmetic rather than by reading. Most FM positions are not money: a liability cap",
+    "is a percentage of annual charges, payment terms are days, a breach window is hours, which is",
+    "why valueUnit exists and why it is not a currency code.",
+    "",
+    "valueDirection is what stops the comparison being nonsense. 45-day payment terms are worse than",
+    "60; 48-hour breach notification is worse than 24. Without a direction the same arithmetic says",
+    "one of those is a concession and the other a win, and it cannot tell which.",
+    "",
+    "Insurance has no band on purpose: it is three limits (public, employer's, professional), and one",
+    "band would hold one of them and hide the other two.",
+    "",
+    "ADDED IN THIS REVISION: the fields that let a reviewer act on a finding rather than read it.",
+    "",
+    "  clauseRef        where the clause usually sits in our templates, so a finding can be anchored",
+    "                   to a section number rather than matched on a name that varies by supplier.",
+    "  aliases,         what the same clause gets called in other people's paper. Matching on",
+    "  keywords         'Limitation of Liability' alone misses 'Cap on Liability' and finds nothing.",
+    "  changeType       the routing category, so the band verdict and the approval route agree with",
+    "                   each other instead of being decided in two places.",
+    "  riskWeight       1-5, used to order a review queue. Two High findings are not equal: an",
+    "                   uninsured statutory duty outranks a payment-terms move.",
+    "  escalateTo       who decides when the walk-away line is crossed. approvingRole covers the",
+    "                   fallback band; without escalateTo the walk-away band names no one.",
+    "  guidance         what to do at each of the three positions, in a sentence. The band says",
+    "                   where a term sits; this says what happens next.",
+    "  redFlags         wording that is wrong regardless of the number. A cap at 125% that also",
+    "                   covers death or personal injury is inside the band and still unacceptable,",
+    "                   which pure arithmetic on the band cannot catch.",
+    "  tradeables       what may be conceded to hold this position, and what may not. A negotiator",
+    "                   without this trades the wrong half.",
+    "  standardWording  the model clause, used to generate a first draft and as the left-hand side",
+    "                   of a redline comparison. Still unreviewed by counsel. See the warning above.",
+    "",
+    "term_renewal additionally carries evergreenPosition, because a contract with no end date is a",
+    "different question from a long one: what makes it safe is the rolling termination right, not",
+    "the term length, and a band expressed in years cannot say that.",
+    "",
+    "CROSS-REFERENCES. The model wording deliberately points between clauses: the indemnity names",
+    "the cap it sits outside, the insurance clause says that carrying cover is not the same as",
+    "accepting liability, service credits name the termination right they do not displace. A clause",
+    "library whose clauses never refer to each other is a list, not a contract.",
+    "",
+    "This matters to review, not just to drafting. When a counterparty edits clause 7.2 and leaves",
+    "7.4 alone, the diff of 7.2 contains no trace of the fact that an uncapped indemnity has just",
+    "been repriced. src/lib/crossref.js builds the reference graph from the assembled document and",
+    "pulls both directions into the review: what this clause points at, and what points back at it.",
+    "The second is the half a paragraph-at-a-time review cannot have."
+  ],
+  "clauses": [
+    {
+      "code": "liability_cap",
+      "name": "Limitation of liability",
+      "category": "liability",
+      "clauseRef": "7.2",
+      "standard": "Liability capped at 125% of the annual charges, uncapped for death or personal injury, fraud, and breach of confidentiality.",
+      "fallback": "100% of annual charges, with the same uncapped carve-outs.",
+      "walkAway": "Below 100% of annual charges, or any cap applied to death, personal injury or fraud.",
+      "standardValue": 125,
+      "fallbackValue": 100,
+      "walkAwayValue": 100,
+      "valueUnit": "percent_annual_charges",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Liability/Risk",
+      "riskWeight": 5,
+      "why": "The carve-outs matter more than the number. A cap on liability for death or personal injury is void in the UK under UCTA 1977 section 2(1), so a supplier proposing one is proposing something unenforceable, and accepting it signals that nobody read it.",
+      "guidance": {
+        "atStandard": "No action. Record the position and move on.",
+        "atFallback": "Contract Manager notes it; Legal is informed but does not need to sign. Check the carve-outs survived the reduction before accepting.",
+        "atWalkAway": "Do not accept. Escalate to Head of Legal with the supplier's stated commercial reason attached."
+      },
+      "redFlags": [
+        "Any cap expressed as covering death, personal injury or fraud: void under UCTA 1977 s.2(1) and a sign the drafter did not read it.",
+        "A cap stated as a fixed sum rather than a percentage of charges: it does not move with contract value on renewal or variation.",
+        "'Aggregate liability' silently redefined to run per claim year rather than for the whole term."
+      ],
+      "tradeables": [
+        "A lower cap is arguable where the supplier accepts uncapped liability for data protection breach.",
+        "Never trade the death/personal injury/fraud carve-outs for a higher number: an unenforceable cap has no value."
+      ],
+      "aliases": [
+        "Limitation of Liability",
+        "Liability Cap",
+        "Cap on Liability",
+        "Limitation of Liability and Indemnity"
+      ],
+      "keywords": [
+        "aggregate liability",
+        "liability cap",
+        "shall not exceed",
+        "limitation of liability"
+      ],
+      "standardWording": "The Supplier's aggregate liability arising out of or in connection with this Agreement, whether in contract, tort (including negligence), breach of statutory duty or otherwise, shall not exceed one hundred and twenty-five per cent (125%) of the Annual Charges. Nothing in this Agreement limits or excludes either party's liability for death or personal injury caused by its negligence, for fraud or fraudulent misrepresentation, or for breach of clause 8 (Confidentiality)."
+    },
+    {
+      "code": "indemnity",
+      "name": "Indemnities",
+      "category": "liability",
+      "clauseRef": "7.4",
+      "standard": "Supplier indemnifies for third-party IP claims, breach of data protection law, and death or personal injury caused by its negligence.",
+      "fallback": "The same, with the IP indemnity capped at the liability cap.",
+      "walkAway": "No data protection indemnity where the supplier processes personal data.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Liability/Risk",
+      "riskWeight": 5,
+      "why": "An indemnity sits outside the liability cap unless the contract says otherwise, so it is the clause most often traded away by someone who has read only the cap.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Acceptable where the supplier processes no personal data. Confirm that against the DPA before signing, not from memory.",
+        "atWalkAway": "Do not accept where personal data is in scope. Escalate to Head of Legal."
+      },
+      "redFlags": [
+        "Indemnity brought inside the liability cap without the cap being raised to compensate.",
+        "Data protection indemnity deleted while the supplier still processes personal data.",
+        "'Indemnify' quietly downgraded to 'be responsible for', which removes the duty to defend and pay costs as incurred."
+      ],
+      "tradeables": [
+        "Capping the IP indemnity at the liability cap is a normal concession.",
+        "The data protection indemnity is not a trading chip where the supplier is a processor."
+      ],
+      "aliases": [
+        "Indemnity",
+        "Indemnities",
+        "Supplier Indemnity"
+      ],
+      "keywords": [
+        "indemnify",
+        "indemnity",
+        "hold harmless",
+        "defend"
+      ],
+      "standardWording": "The Supplier shall indemnify and hold the Client harmless against all losses, damages, costs and expenses arising from (a) any claim that the Services or Deliverables infringe a third party's intellectual property rights, (b) the Supplier's breach of applicable data protection law, and (c) death or personal injury caused by the Supplier's negligence. The indemnities in this clause are given in addition to, and are not subject to, the limit in clause 7.2."
+    },
+    {
+      "code": "insurance",
+      "name": "Insurance",
+      "category": "liability",
+      "clauseRef": "11.1",
+      "standard": "Public liability £10m, employer's liability £10m, professional indemnity £5m where advice is given, all maintained for six years after termination.",
+      "fallback": "Public and employer's liability £5m; professional indemnity £2m.",
+      "walkAway": "Employer's liability below the statutory minimum, or no run-off cover for professional indemnity.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Insurance/Risk",
+      "riskWeight": 4,
+      "why": "Run-off is the part that gets dropped. A defect discovered three years after a contractor leaves is uninsured if cover ended with the contract, and that is exactly when building defects surface.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Reduced public liability is arguable on a low-footfall single site. Ask what the supplier's actual policy carries: often it is higher than what they proposed.",
+        "atWalkAway": "Do not accept. Employer's liability below the statutory floor is not negotiable at any price."
+      },
+      "redFlags": [
+        "Employer's liability below GBP 5,000,000: that floor is statutory in Great Britain, not a preference.",
+        "Cover written 'in the aggregate' where the standard says 'per occurrence': one bad year exhausts it.",
+        "Certificate obligation dropped, leaving a limit nobody ever has to evidence."
+      ],
+      "tradeables": [
+        "Public liability limit is genuinely site-dependent and can move.",
+        "Employer's liability and the annual certificate obligation cannot."
+      ],
+      "aliases": [
+        "Insurance",
+        "Insurance Requirements",
+        "Required Insurances"
+      ],
+      "keywords": [
+        "public liability",
+        "employer's liability",
+        "professional indemnity",
+        "per occurrence",
+        "insurance"
+      ],
+      "standardWording": "The Supplier shall maintain, with a reputable insurer, public liability insurance of not less than GBP 5,000,000 per occurrence, employer's liability insurance of not less than GBP 5,000,000, and professional indemnity insurance of not less than GBP 2,000,000, and shall provide certificates of currency on each policy anniversary. Maintaining the cover required by this clause does not limit the Supplier's liability under clause 7.2."
+    },
+    {
+      "code": "payment_terms",
+      "name": "Payment terms",
+      "category": "commercial",
+      "clauseRef": "5.1",
+      "standard": "60 days from receipt of a valid invoice.",
+      "fallback": "45 days.",
+      "walkAway": "Under 30 days, or payment in advance for services not yet performed.",
+      "standardValue": 60,
+      "fallbackValue": 45,
+      "walkAwayValue": 30,
+      "valueUnit": "days",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "finance_commercial_approver",
+      "escalateTo": "head_of_finance",
+      "changeType": "Payment",
+      "riskWeight": 3,
+      "why": "Shorter terms are a working-capital cost, not a legal risk, which is why this is Finance's decision and not Legal's. Note the asymmetry: the supplier wants shorter, we want longer, so the walk-away is a floor rather than a ceiling.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Finance may approve 45 days without escalation. Confirm it does not clash with a group treasury policy.",
+        "atWalkAway": "Escalate to Head of Finance. Anything under 30 days is a working-capital decision, not a contract one."
+      },
+      "redFlags": [
+        "The word 'undisputed' removed: the client then owes disputed invoices on the clock.",
+        "Interest on late payment above the statutory rate.",
+        "Payment triggered on invoice date rather than receipt, which silently shortens the window by the postal delay."
+      ],
+      "tradeables": [
+        "Shorter terms are worth trading for an early-settlement discount, so ask for one before conceding.",
+        "Keep 'undisputed' whatever the number becomes."
+      ],
+      "aliases": [
+        "Payment Terms",
+        "Payment",
+        "Invoicing and Payment"
+      ],
+      "keywords": [
+        "undisputed invoices",
+        "days of receipt",
+        "payment terms",
+        "net "
+      ],
+      "standardWording": "The Client shall pay all undisputed invoices within sixty (60) days of receipt. Invoices shall be submitted monthly in arrears and shall reference the Contract Number and the relevant purchase order. The Charges may be varied only in accordance with clause 18.1."
+    },
+    {
+      "code": "term_renewal",
+      "name": "Term and renewal",
+      "category": "term",
+      "clauseRef": "4.1",
+      "standard": "Three-year initial term, renewal by express agreement only.",
+      "fallback": "Automatic renewal for twelve months with 90 days' notice to prevent it.",
+      "walkAway": "Automatic renewal with less than 90 days' notice, or renewal for a term longer than the original.",
+      "approvingRole": "contract_manager",
+      "escalateTo": "director_contract_management",
+      "changeType": "Administrative",
+      "riskWeight": 3,
+      "why": "Auto-renewal is the single largest source of unintended commitment in FM, and it is why P0-D5's key dates exist. A 30-day notice window on a three-year renewal means one missed reminder costs three years.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Contract Manager may approve. Set the renewal reminder to the notice period plus 30 days on the day you accept.",
+        "atWalkAway": "Do not accept an auto-renewal the client cannot stop. Escalate to Director of Contract Management."
+      },
+      "redFlags": [
+        "Auto-renewal with a notice period longer than the renewal period: the contract can never be exited cleanly.",
+        "An evergreen (no end date) term with no unilateral termination right: that is a perpetual commitment, not a rolling one.",
+        "Renewal at a price to be agreed, with no fallback if it is not agreed."
+      ],
+      "tradeables": [
+        "Longer initial term is tradeable against price certainty or indexation caps.",
+        "Notice period length is not. It is the only exit."
+      ],
+      "aliases": [
+        "Term",
+        "Term and Renewal",
+        "Duration",
+        "Renewal",
+        "Auto-Renewal"
+      ],
+      "keywords": [
+        "initial term",
+        "auto-renew",
+        "automatically renew",
+        "successive",
+        "evergreen",
+        "rolling term"
+      ],
+      "evergreenPosition": {
+        "standard": "Evergreen (no fixed end date) is acceptable only with a rolling right to terminate for convenience on the standard notice period, and an annual price review with a cap.",
+        "fallback": "Evergreen with termination for convenience on up to 120 days' notice.",
+        "walkAway": "Evergreen with no unilateral termination right, or notice longer than 180 days.",
+        "why": "An evergreen contract is the right shape for a service that must not stop, and the wrong shape for a commitment nobody re-examines. The termination right is what makes the difference, so it is the term to hold."
+      },
+      "standardWording": "This Agreement commences on the Start Date and continues for an initial term of three (3) years. It shall then renew automatically for successive periods of twelve (12) months unless either party gives not less than ninety (90) days' written notice before the end of the then-current term."
+    },
+    {
+      "code": "termination_convenience",
+      "name": "Termination for convenience",
+      "category": "term",
+      "clauseRef": "9.1",
+      "standard": "Client may terminate on 90 days' notice without cause and without charge.",
+      "fallback": "90 days' notice with payment for work performed and unavoidable committed costs, evidenced.",
+      "walkAway": "No termination for convenience, or an exit fee not tied to evidenced costs.",
+      "standardValue": 90,
+      "fallbackValue": 90,
+      "valueUnit": "days",
+      "valueDirection": "higher_is_worse",
+      "approvingRole": "contract_manager",
+      "escalateTo": "head_of_legal",
+      "changeType": "Termination",
+      "riskWeight": 4,
+      "why": "'Unavoidable committed costs' must be evidenced or it becomes whatever the supplier asserts on the way out, which is the moment the relationship is least cooperative.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Contract Manager may approve where an exit payment is tied to work performed and unavoidable committed costs, and those costs must be evidenced rather than asserted.",
+        "atWalkAway": "Escalate to Head of Legal. No convenience right at all, or an exit fee untied to evidenced cost, is a walk-away regardless of the notice period."
+      },
+      "redFlags": [
+        "Asymmetric notice: the supplier can leave on 30 days, the client needs 180.",
+        "An exit fee or 'termination charge' attached to a convenience right, which turns it into a penalty.",
+        "Notice shorter than the exit assistance period, so the contract ends before handover finishes."
+      ],
+      "tradeables": [
+        "A short notice period is only safe where exit assistance is long. Read the two together.",
+        "Mutual notice is worth more than a longer one-sided notice."
+      ],
+      "aliases": [
+        "Termination for Convenience",
+        "Termination",
+        "Termination Rights"
+      ],
+      "keywords": [
+        "terminate",
+        "for convenience",
+        "written notice",
+        "notice period"
+      ],
+      "standardWording": "Either party may terminate this Agreement for convenience on not less than ninety (90) days' prior written notice to the other. No termination charge shall be payable on a termination under this clause.",
+      "bandNote": "standardValue and fallbackValue are both 90 days: the notice period is not what separates the two positions, the exit charge is. Read the position text, not the arithmetic. valueDirection lower_is_worse applies to the notice the Client receives from the Supplier, which is the direction that matters operationally."
+    },
+    {
+      "code": "service_levels",
+      "name": "Service levels and service credits",
+      "category": "performance",
+      "clauseRef": "6.3",
+      "standard": "Service credits up to 10% of monthly charges, with a right to terminate for persistent failure over three consecutive months.",
+      "fallback": "Credits up to 5%, termination right after four consecutive months.",
+      "walkAway": "Service credits as the sole remedy for service failure.",
+      "standardValue": 10,
+      "fallbackValue": 5,
+      "valueUnit": "percent_monthly_charges",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "contract_manager",
+      "escalateTo": "director_contract_management",
+      "changeType": "SLA/Performance",
+      "riskWeight": 3,
+      "why": "'Sole remedy' is the phrase to watch. It converts every failure into a small discount and removes the right to claim actual loss, so a supplier whose failure closes a building owes you a percentage of one month's fee.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Contract Manager may approve. Check the credit cap against one month of actual charges to see what it is worth in cash.",
+        "atWalkAway": "Escalate to Director of Contract Management. Credits below 5% do not change supplier behaviour, which is the only reason they exist."
+      },
+      "redFlags": [
+        "Service credits stated as the client's 'sole and exclusive remedy' for performance failure.",
+        "A credit cap so low it is cheaper for the supplier to fail than to perform.",
+        "Measurement windows long enough that a month of failures averages out to a pass."
+      ],
+      "tradeables": [
+        "A lower credit percentage is arguable where an earn-back mechanism or a termination right for persistent failure is added.",
+        "Never accept credits as the sole remedy: that removes the right to damages for the failure that mattered."
+      ],
+      "aliases": [
+        "Service Levels",
+        "Service Level Credits",
+        "Service Credits",
+        "SLA",
+        "KPIs"
+      ],
+      "keywords": [
+        "service credit",
+        "service level",
+        "monthly service fee",
+        "capped at",
+        "kpi"
+      ],
+      "standardWording": "The Supplier shall meet the Service Levels in Schedule 3. For each Service Level failure the Supplier shall issue a service credit against the monthly Charges, capped at ten per cent (10%) of the monthly Charges. The Client may terminate for persistent failure over three (3) consecutive months. Service credits are not the Client's sole remedy and do not limit any other right, including the right to terminate under clause 9.1."
+    },
+    {
+      "code": "data_protection",
+      "name": "Data protection",
+      "category": "compliance",
+      "clauseRef": "12.1",
+      "standard": "Full UK/EU GDPR article 28 terms, no sub-processing without prior written consent, breach notification within 24 hours.",
+      "fallback": "Sub-processing on notice with a right to object; breach notification within 48 hours.",
+      "walkAway": "No article 28 terms where personal data is processed, or notification beyond 72 hours.",
+      "standardValue": 24,
+      "fallbackValue": 48,
+      "walkAwayValue": 72,
+      "valueUnit": "hours",
+      "valueDirection": "higher_is_worse",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Liability/Risk",
+      "riskWeight": 5,
+      "why": "72 hours is the regulator's deadline for the controller, so a processor notifying at 72 hours guarantees the controller misses it. The contractual clock has to be shorter than the statutory one.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "48 hours is workable if, and only if, the supplier notifies on discovery rather than on confirmation. Check which the wording says.",
+        "atWalkAway": "Do not accept. Escalate to Head of Legal. Article 28 terms are set by law, so there is limited room to negotiate them anyway."
+      },
+      "redFlags": [
+        "Breach notification measured in days rather than hours: the client's own 72-hour regulator clock starts at the supplier's discovery, not its notice.",
+        "General written authorisation for sub-processors with no right to object.",
+        "Audit rights reduced to a supplier-supplied certificate with no right to inspect."
+      ],
+      "tradeables": [
+        "Almost nothing here is tradeable: UK/EU GDPR sets the required terms.",
+        "The negotiable part is operational: notification routing, audit scheduling, sub-processor lists."
+      ],
+      "aliases": [
+        "Data Protection",
+        "Personal Data",
+        "GDPR",
+        "Data Processing"
+      ],
+      "keywords": [
+        "personal data",
+        "processor",
+        "controller",
+        "article 28",
+        "breach notification",
+        "sub-processor"
+      ],
+      "standardWording": "Where the Supplier processes personal data on the Client's behalf it does so as processor. The Supplier shall notify the Client without undue delay and in any event within twenty-four (24) hours of becoming aware of any personal data breach, and shall not appoint a sub-processor without the Client's prior written consent. The indemnity in clause 7.4 applies to any breach of this clause."
+    },
+    {
+      "code": "subcontracting",
+      "name": "Subcontracting",
+      "category": "operational",
+      "clauseRef": "10.2",
+      "standard": "No subcontracting without prior written consent; supplier remains fully liable for subcontractors.",
+      "fallback": "Subcontracting permitted to a named list, with consent required for additions.",
+      "walkAway": "Subcontracting at will, or any dilution of the supplier's liability for its subcontractors.",
+      "approvingRole": "procurement_supplier_manager",
+      "escalateTo": "director_contract_management",
+      "changeType": "Administrative",
+      "riskWeight": 3,
+      "why": "The liability point is the one that matters. Consent rights are administratively expensive; a supplier that stays liable for its chain has the incentive to manage it, and one that does not has the opposite.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Procurement may approve a named list. Get the list, and get it into a schedule so it cannot change silently.",
+        "atWalkAway": "Do not accept. Escalate. Statutory compliance work must stay with the party that was vetted for it."
+      },
+      "redFlags": [
+        "Free subcontracting of the whole service, which makes the counterparty a broker rather than a supplier.",
+        "The prime's responsibility for subcontractor acts deleted alongside the consent right.",
+        "Assignment permitted to any group company: group structures change without notice."
+      ],
+      "tradeables": [
+        "Consent-not-unreasonably-withheld is the usual landing point and is fine.",
+        "Prime responsibility for subcontractor performance is not tradeable."
+      ],
+      "aliases": [
+        "Subcontracting",
+        "Assignment and Subcontracting",
+        "Sub-contractors"
+      ],
+      "keywords": [
+        "subcontract",
+        "sub-contractor",
+        "assign",
+        "novate"
+      ],
+      "standardWording": "The Supplier shall not subcontract any part of the Services without the Client's prior written consent, such consent not to be unreasonably withheld. The Supplier remains fully responsible for the acts and omissions of any subcontractor as if they were its own, including for the purposes of clauses 11.1 and 13.1."
+    },
+    {
+      "code": "health_safety",
+      "name": "Health, safety and statutory compliance",
+      "category": "compliance",
+      "clauseRef": "13.1",
+      "standard": "Supplier complies with all applicable health and safety law, holds relevant accreditation, and provides evidence of statutory inspections within five working days of request.",
+      "fallback": "Evidence within ten working days.",
+      "walkAway": "Any dilution of statutory compliance obligations, or refusal to evidence inspections.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Insurance/Risk",
+      "riskWeight": 5,
+      "why": "In hard FM this is the clause that keeps a client out of court. Statutory inspection duties for lifts, fire systems and pressure vessels do not transfer with the service: the duty holder remains liable, so the evidence has to be obtainable on demand.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Only where the client genuinely retains the duty holder role for that asset, and the contract says which assets.",
+        "atWalkAway": "Do not accept. Escalate to Head of Legal. A fire or lift inspection lapse is a criminal exposure for the client's officers."
+      },
+      "redFlags": [
+        "Statutory compliance framed as 'reasonable endeavours': a duty imposed by statute is not an endeavours obligation.",
+        "The client made responsible for compliance on work the supplier controls.",
+        "Records obligation removed: without records there is no evidence of compliance to produce to an inspector."
+      ],
+      "tradeables": [
+        "How compliance is evidenced and how often is tradeable.",
+        "Who holds the statutory duty is not."
+      ],
+      "aliases": [
+        "Health and Safety",
+        "Statutory Compliance",
+        "Compliance with Law",
+        "HSE"
+      ],
+      "keywords": [
+        "health and safety",
+        "statutory",
+        "compliance",
+        "method statement",
+        "risk assessment",
+        "permit to work"
+      ],
+      "standardWording": "The Supplier shall comply with all applicable health and safety legislation and approved codes of practice, shall maintain current risk assessments and method statements for all Services, and shall retain compliance records for a period of not less than six (6) years and produce them to the Client on request."
+    },
+    {
+      "code": "tupe",
+      "name": "TUPE and employee transfer",
+      "category": "employment",
+      "clauseRef": "14.1",
+      "jurisdiction": "GB",
+      "standard": "Supplier provides employee liability information 28 days before transfer, indemnifies for pre-transfer employment liabilities, and bears the cost of its own redundancies on exit.",
+      "fallback": "Employee liability information 21 days before transfer, with a shared-cost mechanism for exit redundancies.",
+      "walkAway": "No employee liability information, or a client indemnity for the supplier's pre-transfer liabilities.",
+      "standardValue": 28,
+      "fallbackValue": 21,
+      "valueUnit": "days",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Administrative",
+      "riskWeight": 4,
+      "why": "UK-specific and unavoidable: on a service-provider change staff transfer by operation of law whether or not the contract mentions it. The contract only allocates the cost, and if it is silent, the cost lands on the client.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Legal may approve twenty-one (21) days where the population is small and stable, provided the shared-cost mechanism for exit redundancies is in.",
+        "atWalkAway": "Do not accept. Escalate to Head of Legal: an unindemnified pre-transfer liability is open-ended, and a client indemnity for the supplier's own pre-transfer acts is the wrong way round."
+      },
+      "redFlags": [
+        "Employee liability information promised 'on request' rather than by a fixed date before transfer.",
+        "No indemnity for pre-transfer employment liabilities, which then land on the incoming party.",
+        "Pension obligations left unaddressed entirely."
+      ],
+      "tradeables": [
+        "The information deadline can move a little.",
+        "The indemnity for pre-transfer liabilities cannot."
+      ],
+      "aliases": [
+        "TUPE",
+        "Employee Transfer",
+        "Staff Transfer",
+        "Employment"
+      ],
+      "keywords": [
+        "tupe",
+        "employee liability information",
+        "transfer of undertakings",
+        "relevant transfer"
+      ],
+      "standardWording": "The parties acknowledge that TUPE may apply on commencement and on exit. The outgoing party shall provide complete and accurate employee liability information not less than twenty-eight (28) days before the relevant transfer date, and shall indemnify the incoming party against all liabilities arising from its acts or omissions before that date."
+    },
+    {
+      "code": "governing_law",
+      "name": "Governing law and jurisdiction",
+      "category": "legal",
+      "clauseRef": "16.1",
+      "standard": "Governed by the law of the client legal entity's jurisdiction, with exclusive jurisdiction of its courts.",
+      "fallback": "The client entity's law with non-exclusive jurisdiction.",
+      "walkAway": "The supplier's home jurisdiction, or arbitration in a third country.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Administrative",
+      "riskWeight": 2,
+      "why": "This is also what P2.16 keys off: the legal entity's jurisdiction is what determines the timezone a notice period resolves in. A contract governed elsewhere quietly changes when a deadline falls.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Legal may approve where the supplier's operating entity is in that jurisdiction and enforcement is realistic.",
+        "atWalkAway": "Escalate. A judgment that cannot be enforced is a document, not a remedy."
+      },
+      "redFlags": [
+        "Law and forum split across two countries, which doubles the cost of any dispute.",
+        "Mandatory arbitration in a seat neither party operates in.",
+        "A jurisdiction with no enforcement treaty covering the client's assets."
+      ],
+      "tradeables": [
+        "Forum can move if the law stays.",
+        "Splitting law from forum is a false economy. Refuse it."
+      ],
+      "aliases": [
+        "Governing Law",
+        "Jurisdiction",
+        "Governing Law and Jurisdiction",
+        "Applicable Law"
+      ],
+      "keywords": [
+        "governing law",
+        "jurisdiction",
+        "courts of",
+        "arbitration",
+        "laws of"
+      ],
+      "standardWording": "This Agreement and any dispute arising out of it are governed by the laws of England and Wales, and the parties submit to the exclusive jurisdiction of the courts of England and Wales."
+    },
+    {
+      "code": "force_majeure",
+      "name": "Force majeure",
+      "category": "legal",
+      "clauseRef": "15.1",
+      "standard": "Suspension of obligations for genuinely unforeseeable events; termination right if it continues beyond 60 days. Payment obligations are not excused.",
+      "fallback": "Termination right after 90 days.",
+      "walkAway": "Supplier failure or subcontractor failure listed as force majeure, or charges continuing at full rate while services are suspended.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Termination",
+      "riskWeight": 3,
+      "why": "The walk-away is the whole clause. A force majeure definition broad enough to include the supplier's own supply chain converts a service failure into an excused event, and the client pays for services it is not receiving.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Legal may approve 90 days where the service is not business-critical.",
+        "atWalkAway": "Do not accept an open-ended relief with no exit. Escalate."
+      },
+      "redFlags": [
+        "Labour disputes involving the supplier's own workforce listed as force majeure: that is management, not an act of God.",
+        "Relief with no long-stop termination right, so the contract sits suspended indefinitely.",
+        "Supplier relieved from liability but the client still obliged to pay in full."
+      ],
+      "tradeables": [
+        "The list of qualifying events is tradeable within reason.",
+        "The long-stop termination right is what makes the clause survivable. Keep it."
+      ],
+      "aliases": [
+        "Force Majeure",
+        "Events Beyond Reasonable Control"
+      ],
+      "keywords": [
+        "force majeure",
+        "beyond reasonable control",
+        "act of god",
+        "relieved from"
+      ],
+      "standardWording": "Neither party is liable for failure to perform caused by an event beyond its reasonable control, provided it notifies the other promptly and mitigates. Supplier labour disputes are excluded. If the event continues for more than sixty (60) days either party may terminate this Agreement on written notice with no liability, and clause 9.3 applies to the exit."
+    },
+    {
+      "code": "intellectual_property",
+      "name": "Intellectual property",
+      "category": "legal",
+      "clauseRef": "17.1",
+      "standard": "Client owns deliverables created for it; supplier retains its pre-existing IP and grants a perpetual licence to use it in connection with the deliverables.",
+      "fallback": "Supplier owns deliverables and grants the client a perpetual, irrevocable, transferable licence.",
+      "walkAway": "No licence to background IP embedded in a deliverable the client is expected to use.",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Administrative",
+      "riskWeight": 3,
+      "why": "The realistic failure is a survey or design the client owns on paper but cannot use, because it depends on the supplier's methodology and no licence was granted.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "A perpetual irrevocable licence is functionally equivalent for most FM deliverables. Confirm it is perpetual and survives termination.",
+        "atWalkAway": "Do not accept a licence that ends on termination. Escalate."
+      },
+      "redFlags": [
+        "Deliverables licensed rather than assigned, with the licence ending on termination: the client loses its own asset register.",
+        "Client data treated as supplier background IP.",
+        "No survival of the licence after termination, which strands the exit."
+      ],
+      "tradeables": [
+        "Assignment versus perpetual licence is genuinely tradeable.",
+        "Survival past termination is not."
+      ],
+      "aliases": [
+        "Intellectual Property",
+        "IP",
+        "IPR",
+        "Ownership of Deliverables"
+      ],
+      "keywords": [
+        "intellectual property",
+        "deliverables",
+        "licence",
+        "license",
+        "vest",
+        "background ip"
+      ],
+      "standardWording": "All intellectual property rights in the Deliverables created for the Client under this Agreement vest in the Client on creation. Each party retains its pre-existing background intellectual property and grants the other a licence to use it to the extent necessary to perform or receive the Services."
+    },
+    {
+      "code": "confidentiality",
+      "name": "Confidentiality",
+      "category": "legal",
+      "clauseRef": "8.1",
+      "standard": "Mutual, surviving five years after termination, with the usual carve-outs for public domain and legal compulsion.",
+      "fallback": "Three years' survival.",
+      "walkAway": "One-way confidentiality in the supplier's favour, or no survival after termination.",
+      "standardValue": 5,
+      "fallbackValue": 3,
+      "valueUnit": "years",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "legal",
+      "escalateTo": "head_of_legal",
+      "changeType": "Administrative",
+      "riskWeight": 3,
+      "why": "Survival is the operative term. Confidentiality that ends with the contract protects nothing at the moment it matters most, which is after a relationship ends badly.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Legal may approve 3 years for commercial terms only, provided security information is carved out and stays indefinite.",
+        "atWalkAway": "Escalate. Under 3 years is shorter than the contract term itself on most FM agreements."
+      },
+      "redFlags": [
+        "A survival period shorter than the information stays sensitive: site security and access data does not stop mattering after 3 years.",
+        "Confidentiality made mutual in wording but with carve-outs that only benefit the supplier.",
+        "Permission to name the client as a reference without consent."
+      ],
+      "tradeables": [
+        "The duration is tradeable for ordinary commercial information.",
+        "Security, access control and personal data information should never be time-limited."
+      ],
+      "aliases": [
+        "Confidentiality",
+        "Confidential Information",
+        "Non-Disclosure"
+      ],
+      "keywords": [
+        "confidential",
+        "disclose",
+        "survive",
+        "years after"
+      ],
+      "standardWording": "Each party shall keep the other's Confidential Information confidential and shall not disclose it except to those who need it to perform this Agreement. These obligations survive termination for five (5) years, and indefinitely in respect of security, access control and personal data information."
+    },
+    {
+      "code": "change_control",
+      "name": "Change control",
+      "category": "operational",
+      "clauseRef": "18.1",
+      "standard": "All changes in writing, priced against the agreed rate card, signed by both parties before work begins.",
+      "fallback": "Changes under an agreed low-value threshold may be confirmed retrospectively within five working days.",
+      "walkAway": "Unilateral change of charges, or indexation without a published index and a cap.",
+      "approvingRole": "finance_commercial_approver",
+      "escalateTo": "head_of_finance",
+      "changeType": "Payment",
+      "riskWeight": 3,
+      "why": "Indexation is where multi-year FM contracts drift. 'RPI' with no cap on a five-year contract is an open-ended commitment, and it is invisible at signature because the first year looks the same either way.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Finance may approve. Get the indexation basis named: 'market rates' is not a basis.",
+        "atWalkAway": "Do not accept unilateral pricing. Escalate to Head of Finance."
+      },
+      "redFlags": [
+        "Changes priced at 'prevailing rates' rather than the agreed rate card.",
+        "Deemed acceptance if the client does not respond within a short window.",
+        "Supplier able to vary the charges unilaterally for regulatory change."
+      ],
+      "tradeables": [
+        "Turnaround times and approval thresholds are tradeable.",
+        "The rate card as the pricing basis is not."
+      ],
+      "aliases": [
+        "Change Control",
+        "Variations",
+        "Change Procedure"
+      ],
+      "keywords": [
+        "change control",
+        "variation",
+        "change request",
+        "rate card",
+        "additional charges"
+      ],
+      "standardWording": "No change to the Services or Charges is effective unless agreed in writing by both parties using the change control procedure in Schedule 5. Changes shall be priced against the Rate Card. No change is deemed accepted by silence."
+    },
+    {
+      "code": "exit_transition",
+      "name": "Exit and transition assistance",
+      "category": "term",
+      "clauseRef": "9.3",
+      "standard": "Twelve months' transition assistance at contract rates, with asset registers, maintenance history and data returned in a documented format.",
+      "fallback": "Six months' assistance at contract rates.",
+      "walkAway": "No obligation to return maintenance history or asset data, or transition assistance priced at the supplier's discretion.",
+      "standardValue": 12,
+      "fallbackValue": 6,
+      "valueUnit": "months",
+      "valueDirection": "lower_is_worse",
+      "approvingRole": "contract_manager",
+      "escalateTo": "director_contract_management",
+      "changeType": "Termination",
+      "riskWeight": 4,
+      "why": "The data is the lock-in. A supplier holding the only maintenance history for an estate is very difficult to replace regardless of what the termination clause says, and the successor cannot price the work without it.",
+      "guidance": {
+        "atStandard": "No action.",
+        "atFallback": "Contract Manager may approve six (6) months for a single-service contract. Not for TFM, where six months does not cover one full compliance cycle.",
+        "atWalkAway": "Escalate to Director of Contract Management. Under six months there is no realistic handover on a multi-site estate, and no obligation to return asset data is a walk-away at any duration."
+      },
+      "redFlags": [
+        "Exit assistance charged at rates set at the time of exit: leverage sits entirely with the outgoing supplier.",
+        "Assistance shorter than the notice period, so the service ends mid-handover.",
+        "No obligation to hand back asset data, maintenance history or access records."
+      ],
+      "tradeables": [
+        "Duration is tradeable by contract size.",
+        "The obligation to hand back asset and maintenance data at no charge is not."
+      ],
+      "aliases": [
+        "Exit",
+        "Transition Assistance",
+        "Exit and Transition",
+        "Handover",
+        "Termination Assistance"
+      ],
+      "keywords": [
+        "transition",
+        "exit",
+        "handover",
+        "assistance",
+        "months"
+      ],
+      "standardWording": "On expiry or termination the Supplier shall provide transition assistance for up to twelve (12) months at the Rate Card rates referred to in clause 18.1, and shall hand over all asset data, maintenance history, statutory compliance records and access credentials at no charge."
+    }
+  ]
+}

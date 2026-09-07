@@ -1,0 +1,635 @@
+{
+  "$comment": [
+    "P2.8: the template catalogue. Fourteen templates, one per agreement type, plus jurisdiction",
+    "variants where the law differs enough that one document cannot serve both.",
+    "",
+    "THE WORDING IS NOT HERE, AND THAT IS THE POINT. A template's content is an OOXML file produced",
+    "by legal counsel and published as an immutable version (P0-D4's template_versions). This file is",
+    "the catalogue: what templates exist, what they are for, which agreement type they serve, and",
+    "which merge tokens they need. Inventing contract wording and calling it a default would produce",
+    "a document that looks authoritative and has never been read by a lawyer, which is worse than",
+    "having none.",
+    "",
+    "P2.9 asks global versus jurisdiction-specific. The answer here is: global by default, split only",
+    "where a specific legal difference forces it. Three splits are listed, each with the reason. A",
+    "split with no reason is a maintenance cost that grows with every future amendment.",
+    "",
+    "VARIANTS. A template list with exactly one entry per agreement type is a list, not a catalogue,",
+    "and a picker offering one option reads as a picker that is broken. The variants added here each",
+    "carry a variantReason (a different document for the same law) or a splitReason (a different",
+    "document because the law differs), because the rule that a split with no stated reason is pure",
+    "cost applies to both.",
+    "",
+    "One of them is not an option but a repair: dpa_global exists because dpa_uk_eu is scoped to GB",
+    "and EU, and a legal entity anywhere else had no data processing agreement to generate at all."
+  ],
+  "tokens": {
+    "$comment": [
+      "Merge tokens a template may use, resolved by P1-F1's pipeline. Listed centrally because a",
+      "token that exists in a template and not here is a hole in the generated document that reads",
+      "as a formatting error rather than as missing data."
+    ],
+    "contract": [
+      "contract_number",
+      "title",
+      "start_date",
+      "end_date",
+      "contract_value",
+      "currency_code",
+      "notice_period_days"
+    ],
+    "supplier": [
+      "supplier_name",
+      "supplier_registered_number",
+      "supplier_address",
+      "supplier_contact"
+    ],
+    "client": [
+      "legal_entity_name",
+      "legal_entity_registered_number",
+      "legal_entity_address",
+      "governing_law",
+      "jurisdiction"
+    ],
+    "service": [
+      "service_category",
+      "facility_names",
+      "service_hours",
+      "response_times",
+      "kpi_schedule"
+    ],
+    "commercial": [
+      "payment_terms_days",
+      "rate_card_reference",
+      "indexation_basis",
+      "liability_cap_amount"
+    ]
+  },
+  "templates": [
+    {
+      "code": "msa_global",
+      "name": "Master Services Agreement (global)",
+      "agreementType": "msa",
+      "jurisdiction": "global",
+      "purpose": "Umbrella terms for all supplier work. Call-offs and statements of work hang from it.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "msa_short_global",
+      "name": "Master Services Agreement (short form)",
+      "agreementType": "msa",
+      "jurisdiction": "global",
+      "purpose": "Umbrella terms for low-value, low-risk supplier work, with the schedules folded into the body.",
+      "variantReason": "Risk-proportionate. Below the low-touch threshold a full MSA costs more to negotiate than the contract is worth, and the usual result is that nobody papers the relationship at all. This keeps the liability, indemnity and data protection terms and drops the governance machinery.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "msa_uk",
+      "name": "Master Services Agreement (UK)",
+      "agreementType": "msa",
+      "jurisdiction": "GB",
+      "purpose": "Umbrella terms for a UK legal entity, with TUPE, UK GDPR and statutory compliance drafted in.",
+      "splitReason": "TUPE on any service-provider change, UK GDPR article 28 terms, and the UK statutory compliance regime all have to sit in the umbrella document rather than in each call-off. None of the three has an equivalent in most other jurisdictions.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "tfm_global",
+      "name": "Total Facilities Management Agreement",
+      "agreementType": "tfm",
+      "jurisdiction": "global",
+      "purpose": "Single supplier across the estate, with an integrated service schedule and governance model.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "tfm_multisite_global",
+      "name": "Total Facilities Management Agreement (multi-site)",
+      "agreementType": "tfm",
+      "jurisdiction": "global",
+      "purpose": "Whole-estate FM across several countries, with per-site schedules and a central governance model.",
+      "variantReason": "One agreement, many sites in different countries. The service levels, hours and statutory obligations are per site while the liability, indemnity and governance terms are central, so the document is structured around a site schedule rather than a single scope clause. Using the single-site form across an estate leaves every local difference undocumented.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "tfm_uk",
+      "name": "Total Facilities Management Agreement (UK)",
+      "agreementType": "tfm",
+      "jurisdiction": "GB",
+      "purpose": "Whole-estate FM for a UK entity, with TUPE and the UK statutory inspection regime.",
+      "splitReason": "A TFM transfer moves the largest headcount of any FM contract, so TUPE is not an annex to it: it is a main-body allocation of employee liability. The compliance schedule also names UK statutes, which a global document cannot.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "hard_fm_critical_global",
+      "name": "Hard FM Services Agreement (business-critical)",
+      "agreementType": "hard_fm",
+      "jurisdiction": "global",
+      "purpose": "Hard FM where a failure stops the business: data centres, laboratories, healthcare plant.",
+      "variantReason": "On critical plant the remedy for failure is not a service credit, it is attendance inside a named window and a resilience obligation. This form carries shorter response times, a standby regime and a right to step in and remedy at the supplier's cost, none of which belong in an ordinary hard FM contract.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "hard_fm_global",
+      "name": "Hard FM Services Agreement",
+      "agreementType": "hard_fm",
+      "jurisdiction": "global",
+      "purpose": "Mechanical, electrical, plumbing, fire and lifts, with the statutory compliance schedule.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "hard_fm_uk",
+      "name": "Hard FM Services Agreement (UK)",
+      "agreementType": "hard_fm",
+      "jurisdiction": "GB",
+      "purpose": "Mechanical, electrical, plumbing, fire and lifts against the UK statutory inspection regime.",
+      "splitReason": "The compliance schedule names the regime by statute: LOLER for lifting equipment, the Electricity at Work Regulations, the Gas Safety (Installation and Use) Regulations, the Regulatory Reform (Fire Safety) Order. A global template cannot name a national regime, and a hard FM contract whose compliance schedule names nothing is a contract with no compliance schedule.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "soft_fm_global",
+      "name": "Soft FM Services Agreement (global)",
+      "agreementType": "soft_fm",
+      "jurisdiction": "global",
+      "purpose": "Cleaning, catering, security, waste and grounds outside the UK.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "soft_fm_single_global",
+      "name": "Soft FM Services Agreement (single service)",
+      "agreementType": "soft_fm",
+      "jurisdiction": "global",
+      "purpose": "One soft service only (cleaning, or security, or catering) at one site.",
+      "variantReason": "Scale. A single cleaning contract at one site does not need the bundled-service governance, the transition plan or the multi-service KPI schedule, and negotiating them costs more than the contract is worth. Liability, insurance and data protection are unchanged.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "soft_fm_uk",
+      "name": "Soft FM Services Agreement (UK)",
+      "agreementType": "soft_fm",
+      "jurisdiction": "GB",
+      "purpose": "Cleaning, catering, security, waste and grounds.",
+      "splitReason": "TUPE. On a UK service-provider change the incumbent's staff transfer by operation of law, and the contract must allocate employee liability information, indemnities and pension obligations. There is no equivalent in most other jurisdictions, and a clause that assumes it would be meaningless there.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "ppm_global",
+      "name": "Planned Preventive Maintenance Agreement",
+      "agreementType": "ppm",
+      "jurisdiction": "global",
+      "purpose": "Scheduled maintenance to a written regime, with the asset register as a schedule.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service"
+      ]
+    },
+    {
+      "code": "ppm_statutory_global",
+      "name": "Planned Preventive Maintenance (statutory assets)",
+      "agreementType": "ppm",
+      "jurisdiction": "global",
+      "purpose": "PPM limited to assets carrying a statutory inspection duty: lifts, pressure systems, fire systems.",
+      "variantReason": "Where the regime is set by law the interval is not negotiable and the competent person has to be independent of whoever did the maintenance. Those two obligations do not belong in a general PPM contract, and leaving them out of a statutory one is how an inspection lapses.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service"
+      ]
+    },
+    {
+      "code": "ppm_uk",
+      "name": "Planned Preventive Maintenance Agreement (UK)",
+      "agreementType": "ppm",
+      "jurisdiction": "GB",
+      "purpose": "Scheduled maintenance against the UK statutory intervals, with the asset register as a schedule.",
+      "splitReason": "The maintenance regime is the compliance evidence, and in the UK the intervals come from LOLER, the Pressure Systems Safety Regulations and the Gas Safety Regulations by name. A regime with no statute behind it is a schedule of visits, not a compliance record.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "service"
+      ]
+    },
+    {
+      "code": "reactive_emergency_global",
+      "name": "Emergency Call-Out Agreement",
+      "agreementType": "reactive",
+      "jurisdiction": "global",
+      "purpose": "Out-of-hours attendance for failures that cannot wait for the next working day.",
+      "variantReason": "Emergency work is priced and governed differently: a call-out rate rather than a day rate, attendance measured in hours rather than days, and authority to make safe without a prior instruction. Running emergencies through the ordinary call-off means either an unauthorised job or an unattended failure.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "reactive_global",
+      "name": "Reactive Maintenance Call-Off",
+      "agreementType": "reactive",
+      "jurisdiction": "global",
+      "purpose": "Called off against agreed rates and response times when something fails.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "reactive_measured_global",
+      "name": "Measured Term Contract",
+      "agreementType": "reactive",
+      "jurisdiction": "global",
+      "purpose": "Reactive and minor works priced from a schedule of rates with an agreed adjustment percentage.",
+      "variantReason": "A different pricing mechanism, not a different scope. Work is valued against a published schedule of rates adjusted by a tendered percentage, which removes the per-job quotation and replaces it with measurement, so the contract needs a measurement and valuation procedure the rate-card form does not have.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "framework_global",
+      "name": "Framework Agreement",
+      "agreementType": "framework",
+      "jurisdiction": "global",
+      "purpose": "Multi-supplier framework with no committed volume; sets terms for future call-offs.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "framework_single_global",
+      "name": "Single-Supplier Framework Agreement",
+      "agreementType": "framework",
+      "jurisdiction": "global",
+      "purpose": "One supplier, no committed volume, direct award of every call-off.",
+      "variantReason": "With one supplier there is no mini-competition, so the protection that competition would have given has to come from the terms: benchmarking, an open-book price review and a right to go to market without penalty. A multi-supplier framework does not need those and a single-supplier one is exposed without them.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "framework_uk",
+      "name": "Framework Agreement (UK public procurement)",
+      "agreementType": "framework",
+      "jurisdiction": "GB",
+      "purpose": "Framework let by a contracting authority under the UK procurement regime.",
+      "splitReason": "A framework let under the Procurement Act 2023 has a maximum term, a permitted-variation regime and call-off rules set by statute rather than by agreement. Departing from them is not a commercial choice, it is a challengeable procurement decision.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "sow_global",
+      "name": "Statement of Work",
+      "agreementType": "sow",
+      "jurisdiction": "global",
+      "purpose": "Scoped, priced work under an existing MSA. Carries no standalone liability terms.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service"
+      ]
+    },
+    {
+      "code": "sow_milestone_global",
+      "name": "Statement of Work (milestone-priced)",
+      "agreementType": "sow",
+      "jurisdiction": "global",
+      "purpose": "Project work paid against defined milestones with acceptance criteria at each one.",
+      "variantReason": "Payment against milestones needs acceptance criteria per milestone and a remedy when one slips. The fixed-price form pays on completion and the time-and-materials form pays on effort, and neither gives the Client a point mid-project at which it can stop paying.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "sow_tm_global",
+      "name": "Statement of Work (time and materials)",
+      "agreementType": "sow",
+      "jurisdiction": "global",
+      "purpose": "Scoped work under an existing MSA, charged against the rate card rather than for a fixed price.",
+      "variantReason": "The pricing model changes the mechanics, not just a number. Fixed-price acceptance criteria are meaningless on time and materials, where what the Client is buying is effort against a cap, so this carries a spend cap and a reporting obligation where the fixed-price template carries acceptance and milestones.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "service",
+        "commercial"
+      ]
+    },
+    {
+      "code": "equipment_supply_global",
+      "name": "Equipment Supply and Installation Agreement",
+      "agreementType": "equipment_supply",
+      "jurisdiction": "global",
+      "purpose": "Plant and equipment with installation, title transfer, warranty and defects liability.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "equipment_supply_lease_global",
+      "name": "Equipment Lease and Maintenance Agreement",
+      "agreementType": "equipment_supply",
+      "jurisdiction": "global",
+      "purpose": "Equipment provided on lease with maintenance included, title staying with the supplier.",
+      "variantReason": "Title never passes, so the clauses that matter invert: the Client has possession and not ownership, the supplier carries the maintenance and insurance risk, and return condition at the end of term becomes a negotiated obligation rather than an afterthought.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "equipment_supply_only_global",
+      "name": "Equipment Supply Agreement (supply only)",
+      "agreementType": "equipment_supply",
+      "jurisdiction": "global",
+      "purpose": "Plant and equipment supplied for installation by others.",
+      "variantReason": "Where someone else installs, the supplier warrants the goods and not the installation, and the boundary between a manufacturing defect and an installation fault becomes the entire dispute. This form allocates that boundary explicitly. Using the supply-and-install document when the supplier does not install leaves them warranting work they never did.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "consultancy_design_global",
+      "name": "Design Services Agreement",
+      "agreementType": "consultancy",
+      "jurisdiction": "global",
+      "purpose": "Design and specification work for projects, with staged deliverables and design liability.",
+      "variantReason": "Design carries a duty that outlives the engagement and attaches to the building, not the report. This form carries design liability, collateral warranties for funders and incoming owners, and copyright in the design with a licence to build, none of which a survey or advisory engagement needs.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "consultancy_global",
+      "name": "Consultancy and Professional Services Agreement",
+      "agreementType": "consultancy",
+      "jurisdiction": "global",
+      "purpose": "Surveys, design, compliance audits. Professional indemnity and deliverable ownership.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "consultancy_survey_global",
+      "name": "Survey and Condition Report Agreement",
+      "agreementType": "consultancy",
+      "jurisdiction": "global",
+      "purpose": "Condition surveys, asset verification and compliance audits producing a report the Client relies on.",
+      "variantReason": "The deliverable is a report somebody will make a spending decision on, so the terms that matter are reliance, the limits of the inspection, and who else may rely on it. A general consultancy agreement does not address reliance, and an unaddressed reliance clause is where the professional indemnity claim starts.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client",
+        "commercial"
+      ]
+    },
+    {
+      "code": "nda_multiparty_global",
+      "name": "Multi-Party Non-Disclosure Agreement",
+      "agreementType": "nda",
+      "jurisdiction": "global",
+      "purpose": "Where three or more parties exchange information: consortium bids, joint site trials.",
+      "variantReason": "With more than two parties, each is both discloser and recipient to every other, and a two-party form signed three times leaves the obligations between the other pairs undefined. This binds all of them to each other in one instrument.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "nda_mutual_global",
+      "name": "Mutual Non-Disclosure Agreement",
+      "agreementType": "nda",
+      "jurisdiction": "global",
+      "purpose": "Signed before any commercial discussion. Mutual by default: a one-way NDA on our paper invites a negotiation that costs more than the protection is worth.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "nda_oneway_global",
+      "name": "One-way Non-Disclosure Agreement",
+      "agreementType": "nda",
+      "jurisdiction": "global",
+      "purpose": "Where only one party discloses: pre-qualification, site access, security information.",
+      "variantReason": "Mutual is still the default: a one-way NDA on our paper invites a negotiation that costs more than the protection is worth. This is for the case where the traffic genuinely runs one way, most often a supplier receiving site security or access information and disclosing nothing of its own. Using it where both parties disclose leaves our own disclosures unprotected.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "dpa_global",
+      "name": "Data Processing Agreement (rest of world)",
+      "agreementType": "dpa",
+      "jurisdiction": "global",
+      "purpose": "Where a supplier processes personal data for a legal entity outside the UK and EU.",
+      "splitReason": "Closes a gap rather than adding an option: the UK/EU template names article 28 of the UK and EU GDPR, and a legal entity outside both had no DPA template at all. This carries the same processor obligations drafted to the contract rather than to a named statute, so it is a floor to be raised by local advice, not a substitute for it.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "dpa_joint_controller_global",
+      "name": "Joint Controller Arrangement",
+      "agreementType": "dpa",
+      "jurisdiction": "global",
+      "purpose": "Where both parties determine the purposes of the processing, rather than one instructing the other.",
+      "splitReason": "A joint controller arrangement is a different legal relationship from a processor appointment, not a variation of it: the parties must agree and publish who answers data subjects and who holds each transparency duty. Papering joint control on a processor template misdescribes the relationship, which is itself the compliance failure.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "dpa_uk_eu",
+      "name": "Data Processing Agreement (UK/EU)",
+      "agreementType": "dpa",
+      "jurisdiction": "GB,EU",
+      "splitReason": "UK GDPR and EU GDPR require specific article 28 terms and, for transfers, the relevant standard contractual clauses. The required wording is set by law rather than by preference, so a global template would be non-compliant in both.",
+      "purpose": "Where a supplier processes personal data: access control, CCTV, visitor management.",
+      "requiredTokens": [
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "variation_extension_global",
+      "name": "Term Extension Agreement",
+      "agreementType": "variation",
+      "jurisdiction": "global",
+      "purpose": "Extends an existing contract without changing its scope.",
+      "variantReason": "An extension is the one variation where nothing changes except time, which is exactly why it is signed without review and becomes the mechanism by which stale terms survive for years. This form requires the indexation basis and the liability cap to be restated, so extending is a decision rather than a default.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "variation_global",
+      "name": "Variation Agreement",
+      "agreementType": "variation",
+      "jurisdiction": "global",
+      "purpose": "Amends an existing contract, naming the clauses changed and the effective date.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "variation_scope_global",
+      "name": "Scope Variation Agreement",
+      "agreementType": "variation",
+      "jurisdiction": "global",
+      "purpose": "Adds, removes or changes services under an existing contract, with the price adjustment.",
+      "variantReason": "A scope change moves the charges, the service levels and often the headcount together, so it needs the rate-card basis and the TUPE position stated. A general variation form that only names the clauses changed leaves the pricing consequence to be argued later.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "termination_cause_global",
+      "name": "Termination for Cause and Reservation of Rights",
+      "agreementType": "termination",
+      "jurisdiction": "global",
+      "purpose": "Ends a contract for breach while preserving claims rather than settling them.",
+      "variantReason": "The opposite of a settlement. Where the Client is terminating for breach it needs the record of the breach and an express reservation of rights: a full-and-final settlement signed in that situation gives away the claim the termination existed to protect.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "termination_expiry_global",
+      "name": "Expiry and Exit Agreement",
+      "agreementType": "termination",
+      "jurisdiction": "global",
+      "purpose": "Manages a contract running to its natural end, with handover to an incoming supplier.",
+      "variantReason": "Nothing has gone wrong, so there is nothing to settle. What is needed instead is the exit machinery: the handover plan, the data and asset return, the TUPE information for the incoming supplier, and who pays for the transition. A termination and settlement agreement carries a waiver that has no place here.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    },
+    {
+      "code": "termination_global",
+      "name": "Termination and Settlement Agreement",
+      "agreementType": "termination",
+      "jurisdiction": "global",
+      "purpose": "Ends a contract, settles sums owed, and handles exit obligations and data return.",
+      "requiredTokens": [
+        "contract",
+        "supplier",
+        "client"
+      ]
+    }
+  ]
+}
