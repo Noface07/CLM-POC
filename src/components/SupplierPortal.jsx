@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import {
   Building2, Eye, Download, FileCheck2, Ban, PenLine, Upload, Link as LinkIcon,
-  Copy, Check, Loader2, AlertTriangle, ShieldCheck, Clock,
+  Copy, Check, Loader2, AlertTriangle, ShieldCheck, Clock, Plus,
 } from "lucide-react";
 import { Tag, Btn, GREEN, AMBER, GRAY, RED, kicker } from "../lib/ui.jsx";
 import DocumentView from "./DocumentView.jsx";
@@ -45,14 +45,20 @@ function AccessLink({ link, expiresOn }) {
 
 export default function SupplierPortal({
   supplier, contractId, contractExists, sentToSupplier, draftDoc, redlineDoc,
-  redlineReceived, onSubmitRedline, onImportRedline, supplierActionItems, onSubmitRevision,
+  redlineReceived, supplierDraft, supplierBaseDoc, onAddScriptedChanges, onSendRedline,
+  onSupplierEditClause, onSupplierDeleteClause, onSupplierDiscardChange, onAcceptAsSent, supplierAccepted,
+  onImportRedline, supplierActionItems, onSubmitRevision,
   envelope, envelopeStatus, supplierViewed, supplierSigned, onSupplierView,
   onSupplierSign, onSupplierDecline, onDownloadExecuted, flash,
   accessLink, accessExpiry, viaLink, waitingOnSigner, redlineReopened,
   onReplyToComment, onResolveComment, onAddComment,
 }) {
-  const shown = redlineReceived ? redlineDoc : draftDoc;
   const canMarkUp = !redlineReceived || redlineReopened;
+  // While marking up, the counterparty works on their own copy. The client sees nothing
+  // until it is sent, which is what makes editing before sending safe.
+  const working = canMarkUp ? (supplierDraft || supplierBaseDoc || draftDoc) : redlineDoc;
+  const shown = working || (redlineReceived ? redlineDoc : draftDoc);
+  const pendingCount = supplierDraft?.changes?.length || 0;
   const [declineWhy, setDeclineWhy] = useState("");
   const [declining, setDeclining] = useState(false);
   const fileInput = useRef(null);
@@ -126,12 +132,42 @@ export default function SupplierPortal({
                 >
                   {importing ? "Reading the document…" : "Upload your marked-up .docx"}
                 </Btn>
-                <Btn onClick={onSubmitRedline} icon={FileCheck2} variant="secondary">
-                  Or return the scripted redline
+                <Btn onClick={onAddScriptedChanges} icon={Plus} variant="secondary">
+                  Add the scripted changes
+                </Btn>
+                <Btn onClick={onAcceptAsSent} icon={Check} variant="secondary" disabled={Boolean(pendingCount)}>
+                  Accept as sent, no changes
                 </Btn>
               </>
             )}
           </div>
+
+          {supplierAccepted && (
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap",
+              background: "var(--color-neutral-100)", border: "1px solid var(--color-divider)", padding: "9px 11px" }}>
+              <Tag c={GREEN} style={{ fontSize: 10.5 }}>Accepted as sent</Tag>
+              <span style={{ fontSize: 12.5 }}>
+                You accepted this document without changes on {supplierAccepted.at}
+                {supplierAccepted.agreed > 0
+                  ? `, agreeing ${supplierAccepted.agreed} proposal${supplierAccepted.agreed === 1 ? "" : "s"} the client had put to you.`
+                  : "."}
+              </span>
+            </div>
+          )}
+
+          {canMarkUp && supplierDraft && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              background: "var(--color-accent-100)", border: "1px solid var(--color-accent-300)", padding: "9px 11px" }}>
+              <Tag c={AMBER} style={{ fontSize: 10.5 }}>Your copy · not sent</Tag>
+              <span style={{ fontSize: 12.5 }}>
+                {pendingCount} tracked change{pendingCount === 1 ? "" : "s"}. Edit any clause below, then send it back.
+              </span>
+              <Btn
+                onClick={onSendRedline} icon={FileCheck2} variant="primary" small
+                style={{ marginLeft: "auto" }} disabled={!pendingCount}
+              >Send the redline to the client</Btn>
+            </div>
+          )}
 
           {canMarkUp && (
             <p style={{ fontSize: 11.5, opacity: 0.6, margin: 0, lineHeight: 1.6 }}>
@@ -181,6 +217,11 @@ export default function SupplierPortal({
             <div style={{ marginTop: "var(--space-2)" }}>
               <DocumentView
                 doc={shown} canAct={false} canComment height={460}
+                canEdit={canMarkUp}
+                currentAuthor={supplier.name}
+                onEditClause={canMarkUp ? onSupplierEditClause : undefined}
+                onDeleteClause={canMarkUp ? onSupplierDeleteClause : undefined}
+                onDiscardChange={canMarkUp ? onSupplierDiscardChange : undefined}
                 onReply={onReplyToComment}
                 onResolveComment={onResolveComment}
                 onAddComment={onAddComment}

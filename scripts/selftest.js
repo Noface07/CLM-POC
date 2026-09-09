@@ -1,6 +1,11 @@
-import { buildDraft, unresolvedTokens, docToPlainText, templateIsDraftable } from "../src/data/templates.js";
+import { buildDraft, unresolvedTokens, docToPlainText, templateIsDraftable, resolvedClauseWording } from "../src/data/templates.js";
 import { TEMPLATES, PLAYBOOK, CLAUSE_BY_CODE } from "../src/data/catalogue.js";
-import { applyRedline, resolveChanges, deriveFindings, pendingChangeCount, diffToRuns, SUPPLIER_REDLINE_EDITS } from "../src/lib/redline.js";
+import {
+  applyRedline, resolveChanges, deriveFindings, pendingChangeCount, diffToRuns,
+  applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
+  markChangesSent, unsentChangesBy, deleteClauseBlock,
+  runsToText, runsToOriginalText, SUPPLIER_REDLINE_EDITS,
+} from "../src/lib/redline.js";
 import { assessFinding, extractValue, placeInBand, matchClause } from "../src/lib/playbook.js";
 import { buildDocx } from "../src/lib/docx.js";
 import { makeZip } from "../src/lib/zip.js";
@@ -12,6 +17,7 @@ import { importDocx } from "../src/lib/docx-import.js";
 import { readZip } from "../src/lib/unzip.js";
 import { parseXml, findAll, textOf, attr } from "../src/lib/xml.js";
 import { buildReferenceGraph, contextFor, silentlyAffected, contextBlock } from "../src/lib/crossref.js";
+import { compareDocs, compareSummary } from "../src/lib/compare.js";
 import { buildPdf } from "../src/lib/pdf.js";
 import { LIFECYCLE_STAGES, stageForStatus } from "../src/components/LifecycleBar.jsx";
 import { SEQUENTIAL } from "../src/components/charts.jsx";
@@ -486,6 +492,253 @@ async function main() {
   check("a simulated push is marked as simulated", stamp.simulated === true);
   check("a milestone push carries no supplier master data",
     !("Name" in stamp && stamp.Name !== ready.Name) && !("Onboarding_Status__c" in stamp));
+
+  // In-place authoring: editing a clause and dropping one in from the playbook both have
+  // to arrive as ordinary tracked changes, or the rest of the workflow cannot see them.
+  const authored = full;
+  const who = { author: "D. Whitfield", role: "Contract Manager", date: "2026-09-08 10:00" };
+
+  const payRef = authored.blocks.find((b) => b.type === "clause" && b.ref === "5.1")?.ref;
+  check("the draft has a clause 5.1 to edit", Boolean(payRef));
+
+  const beforeEdit = runsToOriginalText(authored.blocks.find((b) => b.ref === payRef).runs);
+  const editedDoc = applyClauseEdit(authored, payRef, beforeEdit.replace("60", "45"), who);
+  const editChange = editedDoc.changes.find((c) => c.clauseRef === payRef);
+  check("an in-place edit produces a tracked change", Boolean(editChange));
+  check("the edit records who made it", editChange?.author === who.author && editChange?.authored === true);
+  check("the edit keeps the original wording as its baseline", editChange?.previous === beforeEdit);
+  check("the edited clause carries ins/del runs",
+    editedDoc.blocks.find((b) => b.ref === payRef).runs.some((r) => r.t === "ins" || r.t === "del"));
+
+  const reEdited = applyClauseEdit(editedDoc, payRef, beforeEdit.replace("60", "30"), who);
+  check("re-editing a clause leaves one open change on it",
+    reEdited.changes.filter((c) => c.clauseRef === payRef).length === 1);
+  check("re-editing still diffs from the original, not from the markup",
+    reEdited.changes.find((c) => c.clauseRef === payRef)?.previous === beforeEdit);
+
+  const tupe = CLAUSE_BY_CODE.tupe;
+  const dropped = insertClauseBlock(authored, {
+    afterRef: payRef, ref: tupe.clauseRef, heading: tupe.name,
+    text: tupe.standardWording, playbookCode: tupe.code,
+  }, who);
+  const insertChange = dropped.changes.find((c) => c.inserted);
+  check("a dropped playbook clause becomes a tracked insertion", Boolean(insertChange));
+  check("the inserted block sits directly after the drop target",
+    dropped.blocks[dropped.blocks.findIndex((b) => b.ref === payRef) + 1]?.playbookCode === tupe.code);
+  check("the inserted clause is entirely insertion runs",
+    dropped.blocks.find((b) => b.playbookCode === tupe.code && b.insertedBy)?.runs.every((r) => r.t === "ins"));
+  check("an inserted clause does not collide with an existing reference",
+    dropped.blocks.filter((b) => b.ref === insertChange.clauseRef).length === 1);
+
+  const keptIn = resolveChanges(dropped, { [insertChange.id]: "accepted" });
+  const keptBlock = keptIn.blocks.find((b) => b.ref === insertChange.clauseRef);
+  check("accepting a dropped clause keeps the paragraph as plain text",
+    Boolean(keptBlock) && keptBlock.runs.every((r) => r.t === "text"));
+  check("an accepted clause stops being marked as newly inserted",
+    keptBlock && !keptBlock.insertedBy,
+    "otherwise the next edit re-inserts the whole paragraph");
+
+  const dropRejected = resolveChanges(dropped, { [insertChange.id]: "rejected" });
+  check("rejecting a dropped clause removes the paragraph, not just its text",
+    !dropRejected.blocks.some((b) => b.insertedBy === insertChange.id));
+
+  // The counterparty must receive a clean draft. A clause still carried as an insertion
+  // has no original text behind it, so the next person to edit it re-inserts the whole
+  // paragraph instead of marking up the words that changed.
+  const sentOut = settleAuthoredChanges(dropped, who.author);
+  const settledBlock = sentOut.blocks.find((b) => b.ref === insertChange.clauseRef);
+  check("sending settles an authored insertion into plain text",
+    Boolean(settledBlock) && settledBlock.runs.every((r) => r.t === "text"));
+  check("a settled clause is no longer marked as newly inserted", settledBlock && !settledBlock.insertedBy);
+  check("a settled change leaves the open-change list",
+    !sentOut.changes.some((c) => c.id === insertChange.id));
+  check("settling leaves the other side's markup alone",
+    settleAuthoredChanges(redlined, who.author).changes.length === redlined.changes.length);
+
+  const supplierEdit = applyClauseEdit(
+    sentOut, insertChange.clauseRef,
+    runsToText(settledBlock.runs).replace("twenty-eight (28) days", "fourteen (14) days"),
+    { author: "Meridian CTS", role: "Supplier", date: "10 Sept" }
+  );
+  const supplierRuns = supplierEdit.blocks.find((b) => b.ref === insertChange.clauseRef).runs;
+  const insText = supplierRuns.filter((r) => r.t === "ins").map((r) => r.text).join("");
+  const delText = supplierRuns.filter((r) => r.t === "del").map((r) => r.text).join("");
+  check("the counterparty's edit marks the words, not the paragraph",
+    insText.length < 40 && delText.length < 40,
+    `ins ${insText.length} chars, del ${delText.length} chars`);
+  check("the counterparty's edit shows both sides of the change",
+    insText.includes("fourteen (14)") && delText.includes("twenty-eight (28)"), `${delText} -> ${insText}`);
+  check("the settled wording survives around the edit",
+    supplierRuns.some((r) => r.t === "text" && r.text.includes("employee liability information")));
+
+  // Striking a clause out is a proposal like any other: it stays in the document, struck
+  // through, until somebody decides it.
+  const struck = deleteClauseBlock(full, "5.1", who);
+  const strikeChange = struck.changes.find((c) => c.clauseRef === "5.1");
+  const struckBlock = struck.blocks.find((b) => b.ref === "5.1");
+  check("a deleted clause is proposed, not removed", Boolean(struckBlock) && Boolean(strikeChange));
+  check("the whole clause is struck through",
+    struckBlock.runs.every((r) => r.t === "del") && struckBlock.runs.length === 1);
+  check("the deletion records the wording it would remove",
+    strikeChange.deleted === true && strikeChange.proposed === "" && /60 days/.test(strikeChange.previous));
+  check("a struck clause still counts as something to decide", pendingChangeCount(struck, {}) === 1);
+
+  const strikeAccepted = resolveChanges(struck, { [strikeChange.id]: "accepted" });
+  check("accepting a deletion takes the paragraph with it",
+    !strikeAccepted.blocks.some((b) => b.ref === "5.1"));
+  const strikeRejected = resolveChanges(struck, { [strikeChange.id]: "rejected" });
+  const restoredBlock = strikeRejected.blocks.find((b) => b.ref === "5.1");
+  check("rejecting a deletion puts the clause back untouched",
+    Boolean(restoredBlock) && runsToText(restoredBlock.runs) === strikeChange.previous
+    && restoredBlock.runs.every((r) => r.t === "text"));
+  check("a rejected deletion stops being marked as struck", restoredBlock && !restoredBlock.deletedBy);
+
+  const strikeWithdrawn = discardChange(struck, strikeChange.id);
+  const backAgain = strikeWithdrawn.blocks.find((b) => b.ref === "5.1");
+  check("withdrawing a deletion restores the clause and drops the record",
+    Boolean(backAgain) && !backAgain.deletedBy
+    && runsToText(backAgain.runs) === strikeChange.previous
+    && !strikeWithdrawn.changes.some((c) => c.id === strikeChange.id));
+
+  check("settling my own deletion removes the clause for good",
+    !settleAuthoredChanges(struck, who.author).blocks.some((b) => b.ref === "5.1"));
+  check("a deletion exports as Word deletion markup",
+    new TextDecoder("latin1").decode(new Uint8Array(await buildDocx(struck).arrayBuffer())).includes("<w:del "));
+
+  // Comparing two versions answers a different question from the markup in either of
+  // them: what moved between these two points, whoever moved it.
+  const vA = full;
+  const vB = applyRedline(vA, SUPPLIER_REDLINE_EDITS, { author: "Meridian CTS", role: "Supplier", date: "05 Sep" });
+  const vC = applyClauseEdit(vB, "5.1",
+    runsToText(vB.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 20 days"), who);
+
+  const aToB = compareDocs(vA, vB);
+  check("comparing the draft with their redline finds the clauses they moved",
+    aToB.length === SUPPLIER_REDLINE_EDITS.filter((e) => e.proposed).length - 1,
+    `${aToB.length} clauses differ`);
+  check("every comparison row carries both sides",
+    aToB.every((r) => r.before && r.after && r.runs.length));
+  check("a comparison row marks the words, not the paragraph",
+    aToB.some((r) => r.runs.some((x) => x.t === "text")));
+
+  const bToC = compareDocs(vB, vC);
+  check("comparing consecutive rounds shows only what moved in that round",
+    bToC.length === 1 && bToC[0].ref === "5.1", `${bToC.length} clauses`);
+  check("the round-over-round view reads from their wording, not the draft",
+    /45/.test(bToC[0].before) && /20/.test(bToC[0].after), `${bToC[0].before.slice(0, 46)}`);
+
+  const aToC = compareDocs(vA, vC);
+  const payAC = aToC.find((r) => r.ref === "5.1");
+  check("the cumulative view still reads from the drafted wording",
+    /60/.test(payAC.before) && /20/.test(payAC.after), `${payAC.before.slice(0, 46)}`);
+  check("comparing a version with itself finds nothing", compareDocs(vC, vC).length === 0);
+  check("the summary counts each kind of difference",
+    compareSummary(aToB).changed === aToB.length && compareSummary(aToB).added === 0);
+
+  const withNew = insertClauseBlock(vA, {
+    afterRef: "5.1", ref: "9.9", heading: "Added clause", text: "A brand new obligation.", playbookCode: "tupe",
+  }, who);
+  const addRows = compareDocs(vA, withNew);
+  check("a clause added between versions is reported as added",
+    addRows.length === 1 && addRows[0].status === "added" && addRows[0].ref === "9.9");
+  check("a clause removed between versions is reported as removed",
+    compareDocs(withNew, vA).some((r) => r.status === "removed" && r.ref === "9.9"));
+
+  // A second round of markup lands on a document that already carries the first. Markup
+  // whose change record has been dropped is unacceptable, unrejectable and uncounted.
+  const roundOne = applyRedline(full, SUPPLIER_REDLINE_EDITS,
+    { author: "Meridian CTS", role: "Supplier", date: "05 Sep" });
+  const roundTwo = applyRedline(roundOne, SUPPLIER_REDLINE_EDITS,
+    { author: "Meridian CTS", role: "Supplier", date: "06 Sep" });
+  const liveIds = new Set(roundTwo.changes.map((c) => c.id));
+  const orphans = roundTwo.blocks
+    .flatMap((b) => b.runs || [])
+    .filter((r) => r.changeId && !liveIds.has(r.changeId));
+  check("a second pass keeps the first round's changes", roundTwo.changes.length === roundOne.changes.length,
+    `${roundTwo.changes.length} vs ${roundOne.changes.length}`);
+  check("a second pass orphans no markup", orphans.length === 0, `${orphans.length} orphaned runs`);
+  check("every tracked run still has a change to decide",
+    pendingChangeCount(roundTwo, {}) === roundOne.changes.length);
+
+  // Findings are cumulative: a change is measured against the wording we drafted, not
+  // against whatever the last round happened to leave on the page.
+  const counterOnTheirs = applyClauseEdit(roundOne, "5.1",
+    runsToText(roundOne.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 45 days"),
+    who);
+  check("a later edit is still measured against the original wording",
+    counterOnTheirs.changes.find((c) => c.clauseRef === "5.1").previous
+      === roundOne.changes.find((c) => c.clauseRef === "5.1").previous,
+    "both rounds compare to the drafted clause, so the band reads as total drift");
+
+  // Editing their redline is a counter-proposal, so it has to go back to them before it
+  // can go anywhere else.
+  const theirRedline = applyRedline(full, SUPPLIER_REDLINE_EDITS,
+    { author: "Meridian CTS", role: "Supplier", date: "05 Sep" });
+  const countered = applyClauseEdit(theirRedline, "5.1",
+    runsToText(theirRedline.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 45 days"),
+    who);
+  check("our edit to their redline is an unsent counter-proposal",
+    unsentChangesBy(countered, who.author).length === 1);
+  check("their own markup is not counted as ours to send",
+    unsentChangesBy(countered, "Meridian CTS").length === theirRedline.changes.length - 1,
+    "their 5.1 change was replaced by our counter on the same clause");
+
+  const returned = markChangesSent(countered, who.author);
+  check("sending back clears the unsent counter-proposals",
+    unsentChangesBy(returned, who.author).length === 0);
+  check("a sent counter-proposal stays in the document as markup",
+    returned.changes.some((c) => c.author === who.author && c.sent === true));
+  check("sending ours back does not touch theirs",
+    returned.changes.filter((c) => c.author === "Meridian CTS").every((c) => !c.sent));
+
+  const secondEdit = applyClauseEdit(returned, "6.3",
+    runsToText(returned.blocks.find((b) => b.ref === "6.3").runs).replace("ten per cent (10%)", "five per cent (5%)"),
+    who);
+  check("a further edit after sending is unsent again",
+    unsentChangesBy(secondEdit, who.author).length === 1);
+
+  // Discarding is not rejecting: the clause goes back to its original wording and the
+  // proposal leaves the record entirely.
+  const undone = discardChange(editedDoc, editChange.id);
+  check("discarding an edit removes the change record",
+    !undone.changes.some((c) => c.id === editChange.id));
+  check("discarding an edit restores the original wording",
+    runsToOriginalText(undone.blocks.find((b) => b.ref === payRef).runs) === beforeEdit
+    && !undone.blocks.find((b) => b.ref === payRef).runs.some((r) => r.t === "ins" || r.t === "del"));
+
+  const undropped = discardChange(dropped, insertChange.id);
+  check("discarding an inserted clause removes the whole paragraph",
+    !undropped.blocks.some((b) => b.insertedBy === insertChange.id)
+    && undropped.blocks.length === authored.blocks.length);
+  check("discarding leaves other changes alone",
+    discardChange(dropped, insertChange.id).changes.length === dropped.changes.length - 1);
+
+  // Model wording carries the standard position hard-coded in its prose, so a clause
+  // dropped into a contract that negotiated something else has to be resolved first.
+  const at30 = resolvedClauseWording("payment_terms", { ...values, payment_terms_days: "30" });
+  check("a dropped clause takes this contract's negotiated value",
+    at30.includes("within 30 days") && !at30.includes("sixty (60)"), at30.slice(0, 70));
+  const capped = resolvedClauseWording("liability_cap", { ...values, liability_cap_amount: "110" });
+  check("a dropped liability cap takes this contract's cap",
+    capped.includes("110%") && !capped.includes("125%"));
+  const dutchLaw = resolvedClauseWording("governing_law", { ...values, governing_law: "Netherlands" });
+  check("a dropped governing-law clause follows this contract's law",
+    dutchLaw.includes("Netherlands") && !dutchLaw.includes("England and Wales"));
+  check("an unfilled field is still visibly unfilled after a drop",
+    resolvedClauseWording("payment_terms", {}).includes("[payment_terms_days]"));
+
+  // Authored markup has to leave the building as Word markup, or none of it is real.
+  const authoredDocx = new TextDecoder("latin1").decode(
+    new Uint8Array(await buildDocx(insertClauseBlock(editedDoc, {
+      afterRef: payRef, ref: tupe.clauseRef, heading: tupe.name,
+      text: tupe.standardWording, playbookCode: tupe.code,
+    }, who)).arrayBuffer()));
+  check("an in-place edit exports as Word tracked changes",
+    authoredDocx.includes("<w:ins ") && authoredDocx.includes("<w:del "));
+  check("a dropped clause exports as an insertion carrying its wording",
+    authoredDocx.includes(tupe.standardWording.slice(0, 40)));
+  check("the editor is named as the revision author in the file",
+    authoredDocx.includes(`w:author="${who.author}"`));
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) {

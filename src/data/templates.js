@@ -656,6 +656,22 @@ export function unresolvedTokens(doc) {
   return [...missing];
 }
 
+// A playbook clause as a finished sentence, for dropping into a document that already
+// exists. The model wording carries the standard position hard-coded into its prose
+// ("sixty (60) days", "125%", "England and Wales"), so inserting it raw would contradict
+// whatever this contract actually negotiated. Tokenise it first, then resolve against
+// this contract's own values, exactly as the drafting engine does.
+export function resolvedClauseWording(code, values = {}, options = {}) {
+  const text = options.evergreen && code === "term_renewal"
+    ? EVERGREEN_TERM_WORDING
+    : wordingFor(code, values);
+  return textToRuns(text, values)
+    .map((run) => (run.t === "token"
+      ? (run.value != null && run.value !== "" ? run.value : `[${run.name}]`)
+      : run.text))
+    .join("");
+}
+
 export function buildDraft(templateCode, values = {}, options = {}) {
   const template = TEMPLATE_BY_CODE[templateCode];
   const content = TEMPLATE_CONTENT[templateCode];
