@@ -1,11 +1,21 @@
 import { useRef, useState } from "react";
 import {
   Building2, Eye, Download, FileCheck2, Ban, PenLine, Upload, Link as LinkIcon,
-  Copy, Check, Loader2, AlertTriangle, ShieldCheck, Clock, Plus,
+  Copy, Check, Loader2, AlertTriangle, ShieldCheck, Clock, Plus, ListChecks,
 } from "lucide-react";
 import { Tag, Btn, GREEN, AMBER, GRAY, RED, kicker } from "../lib/ui.jsx";
+import { monitorState } from "../lib/monitoring.js";
 import DocumentView from "./DocumentView.jsx";
 import { downloadDocx } from "../lib/docx.js";
+
+const SUPPLIER_STATE = {
+  overdue: { label: "Overdue", tone: RED },
+  lapsed: { label: "Lapsed", tone: RED },
+  due: { label: "Due soon", tone: AMBER },
+  upcoming: { label: "On track", tone: GREEN },
+  met: { label: "Met", tone: GREEN },
+  watch: { label: "On an event", tone: GRAY },
+};
 
 function AccessLink({ link, expiresOn }) {
   const [copied, setCopied] = useState(false);
@@ -19,7 +29,8 @@ function AccessLink({ link, expiresOn }) {
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <input
-          className="input" readOnly value={link} onFocus={(e) => e.target.select()}
+          className="input" readOnly value={link} aria-label="Access link for this contract"
+          onFocus={(e) => e.target.select()}
           style={{ flex: 1, minWidth: 260, fontSize: 12, fontFamily: "ui-monospace, monospace" }}
         />
         <Btn
@@ -52,6 +63,7 @@ export default function SupplierPortal({
   onSupplierSign, onSupplierDecline, onDownloadExecuted, flash,
   accessLink, accessExpiry, viaLink, waitingOnSigner, redlineReopened,
   onReplyToComment, onResolveComment, onAddComment,
+  obligations = [], obligationLog = {}, validated = {}, today, onSupplierRecord,
 }) {
   const canMarkUp = !redlineReceived || redlineReopened;
   // While marking up, the counterparty works on their own copy. The client sees nothing
@@ -65,6 +77,18 @@ export default function SupplierPortal({
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [importReport, setImportReport] = useState(null);
+  const [recordOn, setRecordOn] = useState(null);
+  const [recordDraft, setRecordDraft] = useState({ at: today, evidence: "" });
+
+  // Only what this counterparty actually owes. The client's own duties are theirs to
+  // track, and showing them here would be showing the supplier the other side's homework.
+  const myObligations = obligations
+    .filter((o) => validated[o.id] && /supplier|both parties|either party/i.test(String(o.responsible || "")))
+    .map((o) => ({ o, entry: obligationLog[o.id], state: monitorState(obligationLog[o.id], today) }))
+    .sort((a, b) => {
+      const order = { lapsed: 0, overdue: 1, due: 2, upcoming: 3, watch: 4, met: 5 };
+      return order[a.state] - order[b.state];
+    });
 
   async function handleFile(file) {
     if (!file) return;
@@ -311,6 +335,84 @@ export default function SupplierPortal({
           <div className="card-title" style={{ marginBottom: 0 }}>Executed</div>
           <Tag c={GREEN} style={{ alignSelf: "flex-start" }}>Fully signed</Tag>
           <div><Btn onClick={onDownloadExecuted} icon={Download} variant="secondary">Download signed copy (PDF)</Btn></div>
+        </div>
+      )}
+
+      {envelopeStatus === "COMPLETED" && myObligations.length > 0 && (
+        <div className="card" style={{ gap: "var(--space-3)", marginTop: "var(--space-4)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <ListChecks size={15} />
+            <div className="card-title" style={{ margin: 0 }}>What you owe under this contract</div>
+            <span style={{ fontSize: 11.5, opacity: 0.55 }}>{myObligations.length} on you · today is {today}</span>
+          </div>
+          <p className="card-body" style={{ margin: 0, lineHeight: 1.6 }}>
+            The duties the client is monitoring against you, with the dates they are measured on. Recording what you
+            delivered here is the same record they see: a duty with a date and nothing against it is not evidence of
+            compliance, whichever side is looking at it.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr><th>Obligation</th><th>Clause</th><th>Frequency</th><th>Next due</th><th>State</th><th>Last recorded</th><th /></tr>
+              </thead>
+              <tbody>
+                {myObligations.map(({ o, entry, state }) => {
+                  const last = (entry?.history || [])[(entry?.history || []).length - 1];
+                  return (
+                    <tr key={o.id}>
+                      <td style={{ maxWidth: 300 }}>
+                        <div style={{ fontWeight: 600 }}>{o.name}</div>
+                        <div style={{ fontSize: 11, opacity: 0.55 }}>{o.evidence && `evidence: ${o.evidence}`}</div>
+                      </td>
+                      <td style={{ fontSize: 12.5 }}>{o.clause}</td>
+                      <td style={{ fontSize: 12.5 }}>{o.frequency}</td>
+                      <td style={{ fontSize: 12.5, whiteSpace: "nowrap" }}>{entry?.dueDate || <span style={{ opacity: 0.5 }}>no date</span>}</td>
+                      <td>
+                        <Tag c={SUPPLIER_STATE[state].tone} style={{ fontSize: 10.5, whiteSpace: "nowrap" }}>
+                          {SUPPLIER_STATE[state].label}
+                        </Tag>
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {last ? <>{last.at}<div style={{ fontSize: 11, opacity: 0.55 }}>{last.evidence || "no evidence"}</div></>
+                          : <span style={{ opacity: 0.5 }}>nothing yet</span>}
+                      </td>
+                      <td>
+                        {onSupplierRecord && (
+                          <Btn small variant="secondary" onClick={() => setRecordOn(o)}>Record</Btn>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            </div>
+          </div>
+
+          {recordOn && (
+            <div style={{ border: "1px solid var(--color-accent-300)", background: "var(--color-accent-100)", padding: 11 }}>
+              <div style={{ ...kicker, marginBottom: 6 }}>Record what you delivered · {recordOn.name}</div>
+              <div className="clm-grid-2" style={{ gap: 10 }}>
+                <label style={{ fontSize: 12 }}>Delivered on
+                  <input className="input" type="date" value={recordDraft.at}
+                    onChange={(e) => setRecordDraft((d) => ({ ...d, at: e.target.value }))} />
+                </label>
+                <label style={{ fontSize: 12 }}>Evidence
+                  <input className="input" value={recordDraft.evidence}
+                    placeholder={recordOn.evidence || "Certificate, report, reference…"}
+                    onChange={(e) => setRecordDraft((d) => ({ ...d, evidence: e.target.value }))} />
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                <Btn small variant="primary" onClick={() => {
+                  onSupplierRecord(recordOn, { ...recordDraft, by: supplier.signatoryName || supplier.name });
+                  setRecordOn(null);
+                }}>Record it</Btn>
+                <Btn small variant="ghost" onClick={() => setRecordOn(null)}>Cancel</Btn>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

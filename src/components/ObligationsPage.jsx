@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Sparkles, Loader2, FileCheck2, Plus, Filter, CalendarClock, Zap, Infinity as InfinityIcon, Archive } from "lucide-react";
 import { Tag, Btn, GREEN, AMBER, GRAY, RED } from "../lib/ui.jsx";
 import { assessObligation, MODE_LABEL, MODE_HINT } from "../lib/obligations.js";
+import ObligationMonitor from "./ObligationMonitor.jsx";
 
 const MODE_ICON = { calendar: CalendarClock, trigger: Zap, standing: InfinityIcon, background: Archive };
 const MODE_TONE = { calendar: GREEN, trigger: AMBER, standing: GRAY, background: GRAY };
@@ -12,6 +13,7 @@ export default function ObligationsPage({
   extractedText, extractingPdf, extractPdfError, runPdfExtraction,
   obligations, obligationsLoading, runObligationExtraction, obligationRunMeta,
   validated, onValidate, onDelete, onAdd,
+  obligationLog, today, onRecordPerformance, onSetDue, onRunSweep, amendmentReview, onRegisterReviewed,
   editingIndex, setEditingIndex, editDraft, setEditDraft, onSaveEdit,
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -93,6 +95,19 @@ export default function ObligationsPage({
         </div>
       ) : (
         <>
+          <ObligationMonitor
+            obligations={obligations}
+            validated={validated}
+            log={obligationLog}
+            today={today}
+            readOnly={readOnly}
+            onRecordPerformance={onRecordPerformance}
+            onSetDue={onSetDue}
+            onRunSweep={onRunSweep}
+            amendmentReview={amendmentReview}
+            onRegisterReviewed={onRegisterReviewed}
+          />
+
           <div className="card" style={{ marginBottom: "var(--space-4)", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <Filter size={15} />
@@ -128,6 +143,7 @@ export default function ObligationsPage({
             </p>
           </div>
           <div style={{ overflowX: "auto" }}>
+            <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
@@ -137,7 +153,7 @@ export default function ObligationsPage({
               </thead>
               <tbody>
                 {rows.map(({ o, index: i, a }) => {
-                  const pending = !validated[i];
+                  const pending = !validated[o.id];
                   if (editingIndex === i) {
                     return (
                       <tr key={i} style={{ background: "color-mix(in srgb, #fdf1da 55%, transparent)" }}>
@@ -239,6 +255,7 @@ export default function ObligationsPage({
                 })}
               </tbody>
             </table>
+            </div>
           </div>
 
           {canManageLifecycle ? (

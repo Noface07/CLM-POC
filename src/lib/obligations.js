@@ -15,6 +15,19 @@ function blank(value) {
 }
 
 export function assessObligation(o) {
+  // A deadline that changes the position by itself is tracked whatever else it lacks:
+  // there is nothing to remind anybody about, because the consequence does not wait for
+  // a person. It has to be swept on the day.
+  if (o?.lapse?.effect) {
+    return {
+      mode: "deadline",
+      track: true,
+      importance: "High",
+      missing: [],
+      reason: `The date decides this one: ${o.lapse.effect} Nothing has to be done for that to happen, which is why it is swept rather than reminded about.`,
+    };
+  }
+
   const frequency = String(o?.frequency || "");
   const due = String(o?.due || "");
   const consequence = String(o?.consequence || "");
@@ -74,6 +87,7 @@ export function assessObligation(o) {
 }
 
 export const MODE_LABEL = {
+  deadline: "Swept",
   calendar: "Scheduled",
   trigger: "On trigger",
   standing: "Standing duty",
@@ -81,6 +95,7 @@ export const MODE_LABEL = {
 };
 
 export const MODE_HINT = {
+  deadline: "The passage of the date changes the contract by itself, so a scheduled job records it on the day.",
   calendar: "Generates dated reminders once validated.",
   trigger: "Watch-listed: fires on an event, not a date.",
   standing: "Continuous duty. Sits in the compliance register with no reminder.",

@@ -4,9 +4,15 @@ import {
   applyRedline, resolveChanges, deriveFindings, pendingChangeCount, diffToRuns,
   applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
   markChangesSent, unsentChangesBy, deleteClauseBlock,
-  runsToText, runsToOriginalText, SUPPLIER_REDLINE_EDITS,
+  runsToText, runsToOriginalText, compareRefs, positionForRef, SUPPLIER_REDLINE_EDITS,
+  handToCounterparty, bumpVersion, applySupplierRevision,
 } from "../src/lib/redline.js";
+import {
+  counterApprovalRows, counterReady, canApproveCounter, outstandingCounters,
+} from "../src/lib/counter.js";
 import { assessFinding, extractValue, placeInBand, matchClause } from "../src/lib/playbook.js";
+import { assessObligation } from "../src/lib/obligations.js";
+import { MOCK_OBLIGATIONS } from "../src/lib/ai.js";
 import { buildDocx } from "../src/lib/docx.js";
 import { makeZip } from "../src/lib/zip.js";
 import { contractVisibility, visibleContracts, roleCanActOnException, ROLES } from "../src/lib/rbac.js";
@@ -16,9 +22,20 @@ import { PORTFOLIO } from "../src/data/contracts.js";
 import { importDocx } from "../src/lib/docx-import.js";
 import { readZip } from "../src/lib/unzip.js";
 import { parseXml, findAll, textOf, attr } from "../src/lib/xml.js";
-import { buildReferenceGraph, contextFor, silentlyAffected, contextBlock } from "../src/lib/crossref.js";
+import { buildReferenceGraph, contextFor, silentlyAffected, contextBlock, citationsOf } from "../src/lib/crossref.js";
 import { compareDocs, compareSummary } from "../src/lib/compare.js";
+import {
+  cycleOf, addCycle, suggestedFirstDue, monitorState, recordPerformance,
+  monitorSummary, performanceRecord, sweep, applyLapse, isDeadline, amendmentImpact,
+} from "../src/lib/monitoring.js";
 import { buildPdf } from "../src/lib/pdf.js";
+import { readSnapshot, writeSnapshot, clearSnapshot, SCHEMA, PERSIST_KEY } from "../src/lib/session.js";
+import {
+  makeEntry as makeAuditEntry, actorFor, actorLabel, formatAuditTime, newestFirst,
+  filterEntries, rolesIn, contractsIn, auditToCsv, AUDIT_CSV_HEADER,
+  forContract, contractLabel, UNSCOPED,
+} from "../src/lib/audit.js";
+import { canReadAudit } from "../src/lib/rbac.js";
 import { LIFECYCLE_STAGES, stageForStatus } from "../src/components/LifecycleBar.jsx";
 import { SEQUENTIAL } from "../src/components/charts.jsx";
 
@@ -523,8 +540,24 @@ async function main() {
   }, who);
   const insertChange = dropped.changes.find((c) => c.inserted);
   check("a dropped playbook clause becomes a tracked insertion", Boolean(insertChange));
-  check("the inserted block sits directly after the drop target",
-    dropped.blocks[dropped.blocks.findIndex((b) => b.ref === payRef) + 1]?.playbookCode === tupe.code);
+  // The drop point picks the clause; the clause's own number picks where it goes.
+  const droppedAt = dropped.blocks.findIndex((b) => b.playbookCode === tupe.code && b.insertedBy);
+  const clausesAround = dropped.blocks.filter((b) => b.type === "clause" && b.ref);
+  const droppedPos = clausesAround.findIndex((b) => b.playbookCode === tupe.code && b.insertedBy);
+  check("an inserted clause lands at its own number, not at the drop point",
+    compareRefs(clausesAround[droppedPos - 1].ref, insertChange.clauseRef) < 0
+    && (!clausesAround[droppedPos + 1] || compareRefs(insertChange.clauseRef, clausesAround[droppedPos + 1].ref) < 0),
+    `${clausesAround[droppedPos - 1]?.ref} | ${insertChange.clauseRef} | ${clausesAround[droppedPos + 1]?.ref}`);
+  const headingAbove = Number(dropped.blocks.slice(0, droppedAt).reverse()
+    .find((b) => b.type === "heading")?.number);
+  check("it never lands under a later section's heading",
+    headingAbove <= Number(insertChange.clauseRef.split(".")[0]),
+    `clause ${insertChange.clauseRef} sits under heading ${headingAbove}; the template has no section `
+    + `${insertChange.clauseRef.split(".")[0]}, so the nearest lower one is correct`);
+  check("clause references sort as numbers, not as strings",
+    compareRefs("10.2", "9.1") > 0 && compareRefs("4.2", "4.10") < 0 && compareRefs("7.2A", "7.2") > 0);
+  check("a clause lower than everything goes to the front",
+    positionForRef(full.blocks, "0.1") === full.blocks.findIndex((b) => b.type === "clause" && b.ref));
   check("the inserted clause is entirely insertion runs",
     dropped.blocks.find((b) => b.playbookCode === tupe.code && b.insertedBy)?.runs.every((r) => r.t === "ins"));
   check("an inserted clause does not collide with an existing reference",
@@ -660,28 +693,88 @@ async function main() {
   check("every tracked run still has a change to decide",
     pendingChangeCount(roundTwo, {}) === roundOne.changes.length);
 
-  // Findings are cumulative: a change is measured against the wording we drafted, not
-  // against whatever the last round happened to leave on the page.
+  // Countering their proposal.
+  //
+  // They struck the wording we drafted and proposed their own; we answer with a third
+  // position. What we are answering is THEIR number, not the one we drafted, and a record
+  // that says otherwise misstates the move and hides that they ever asked.
+  const standing51 = runsToText(roundOne.blocks.find((b) => b.ref === "5.1").runs);
   const counterOnTheirs = applyClauseEdit(roundOne, "5.1",
-    runsToText(roundOne.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 45 days"),
+    standing51.replace(/within \d+ days/, "within 30 days"), who);
+  const theirs51 = roundOne.changes.find((c) => c.clauseRef === "5.1");
+  const ours51 = counterOnTheirs.changes.find((c) => c.clauseRef === "5.1" && c.author === who.author);
+
+  check("our counter is measured against their proposal, not the wording we drafted",
+    ours51.previous === standing51,
+    "they moved it to 45 days, so answering 30 is a move from 45 and not from what we drafted");
+  check("and it still carries the wording that was originally agreed", ours51.base === theirs51.previous);
+  check("our counter names the proposal it answers", ours51.counters === theirs51.id);
+  check("their proposal survives as the record of what they asked for",
+    counterOnTheirs.changes.some((c) => c.id === theirs51.id),
+    "splicing it out loses the position and the comment thread reasoning attached to it");
+  check("marked superseded rather than left open as a second proposal",
+    counterOnTheirs.changes.find((c) => c.id === theirs51.id).status === "superseded");
+  check("a superseded proposal is not a finding of its own",
+    !deriveFindings(counterOnTheirs).some((f) => f.changeId === theirs51.id));
+  check("nor an outstanding decision that blocks signature",
+    pendingChangeCount(counterOnTheirs, {}) === roundOne.changes.length);
+
+  // The document carries all three positions, which is what Word shows when you edit
+  // somebody else's tracked change.
+  const runs51 = counterOnTheirs.blocks.find((b) => b.ref === "5.1").runs;
+  check("the wording we drafted is still struck out by them",
+    runs51.some((r) => r.t === "del" && r.changeId === theirs51.id));
+  check("their proposal is still in the document, struck by our counter",
+    runs51.some((r) => r.t === "del" && r.wasProposedBy === "Meridian CTS" && r.changeId === ours51.id));
+  check("and the strike is attributed to them proposing it, not to us writing it",
+    runs51.find((r) => r.wasProposedBy)?.author === who.author);
+  check("and our counter is inserted after it",
+    runs51.some((r) => r.t === "ins" && !r.supersededBy && r.author === who.author));
+
+  // Deciding the counter decides their proposal with it: one clause, one decision.
+  const counterAccepted = resolveChanges(counterOnTheirs, { [ours51.id]: "accepted" });
+  const counterAcceptedText = runsToText(counterAccepted.blocks.find((b) => b.ref === "5.1").runs);
+  check("accepting our counter drops their superseded wording", !counterAcceptedText.includes("45 days"));
+  check("and leaves ours standing", counterAcceptedText.includes("30 days"));
+
+  const counterRejected = resolveChanges(counterOnTheirs, { [ours51.id]: "rejected" });
+  const counterRejectedText = runsToText(counterRejected.blocks.find((b) => b.ref === "5.1").runs);
+  check("rejecting our counter puts their proposal back on the table", counterRejectedText.includes("45 days"),
+    "a proposal removed from the document rather than superseded could not come back");
+  check("and our counter leaves no trace in the text", !counterRejectedText.includes("30 days"));
+
+  // Retyping what is already there is not a negotiating move.
+  const noopEdit = applyClauseEdit(roundOne, "5.1", standing51, who);
+  check("retyping their wording unchanged proposes nothing",
+    !noopEdit.changes.some((c) => c.author === who.author && c.clauseRef === "5.1"));
+
+  // Revising our OWN unsent markup is the other case, and it is unchanged: one open
+  // proposal, rewritten in place, still measured from the agreed wording.
+  const ourFirst = applyClauseEdit(full, "5.1",
+    runsToText(full.blocks.find((b) => b.ref === "5.1").runs).replace(/within \[?[^\]]*\]? days/, "within 20 days"),
     who);
-  check("a later edit is still measured against the original wording",
-    counterOnTheirs.changes.find((c) => c.clauseRef === "5.1").previous
-      === roundOne.changes.find((c) => c.clauseRef === "5.1").previous,
-    "both rounds compare to the drafted clause, so the band reads as total drift");
+  const ourSecond = applyClauseEdit(ourFirst, "5.1",
+    runsToText(ourFirst.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 25 days"),
+    who);
+  check("revising our own proposal replaces it rather than stacking on it",
+    ourSecond.changes.filter((c) => c.clauseRef === "5.1").length === 1);
+  check("and is still measured from the agreed wording, not from our own last position",
+    ourSecond.changes.find((c) => c.clauseRef === "5.1").previous
+      === runsToOriginalText(full.blocks.find((b) => b.ref === "5.1").runs),
+    "a trail through positions we never put to anybody is not a negotiation record");
 
   // Editing their redline is a counter-proposal, so it has to go back to them before it
   // can go anywhere else.
   const theirRedline = applyRedline(full, SUPPLIER_REDLINE_EDITS,
     { author: "Meridian CTS", role: "Supplier", date: "05 Sep" });
   const countered = applyClauseEdit(theirRedline, "5.1",
-    runsToText(theirRedline.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 45 days"),
+    runsToText(theirRedline.blocks.find((b) => b.ref === "5.1").runs).replace(/within \d+ days/, "within 30 days"),
     who);
   check("our edit to their redline is an unsent counter-proposal",
     unsentChangesBy(countered, who.author).length === 1);
   check("their own markup is not counted as ours to send",
-    unsentChangesBy(countered, "Meridian CTS").length === theirRedline.changes.length - 1,
-    "their 5.1 change was replaced by our counter on the same clause");
+    unsentChangesBy(countered, "Meridian CTS").length === theirRedline.changes.length,
+    "their 5.1 change is superseded by our counter, not removed from the document");
 
   const returned = markChangesSent(countered, who.author);
   check("sending back clears the unsent counter-proposals",
@@ -691,8 +784,9 @@ async function main() {
   check("sending ours back does not touch theirs",
     returned.changes.filter((c) => c.author === "Meridian CTS").every((c) => !c.sent));
 
+  // A genuine counter on a second clause: they capped service credits at 4%, we say 8%.
   const secondEdit = applyClauseEdit(returned, "6.3",
-    runsToText(returned.blocks.find((b) => b.ref === "6.3").runs).replace("ten per cent (10%)", "five per cent (5%)"),
+    runsToText(returned.blocks.find((b) => b.ref === "6.3").runs).replace("capped at 4%", "capped at 8%"),
     who);
   check("a further edit after sending is unsent again",
     unsentChangesBy(secondEdit, who.author).length === 1);
@@ -739,6 +833,399 @@ async function main() {
     authoredDocx.includes(tupe.standardWording.slice(0, 40)));
   check("the editor is named as the revision author in the file",
     authoredDocx.includes(`w:author="${who.author}"`));
+
+  // Monitoring: a date, a state derived from it, and a record of what was delivered.
+  const TODAY = "2027-06-15";
+  const quarterly = { name: "SLA report", frequency: "Quarterly", responsible: "Supplier", consequence: "Service credits" };
+  const oneOff = { name: "Give notice", frequency: "One-time (on termination)", responsible: "Either Party", consequence: "Breach" };
+
+  check("a recurring frequency is recognised as a cycle", cycleOf("Quarterly")?.months === 3);
+  check("annually and monthly are distinguished",
+    cycleOf("Annually").months === 12 && cycleOf("Monthly").months === 1);
+  check("an on-request duty has no cycle to schedule", cycleOf("As requested") === null);
+  check("adding a cycle lands on the right date", addCycle("2027-01-31", cycleOf("Monthly")) === "2027-03-03",
+    "31 Jan + 1 month rolls through a short February, as Date does");
+
+  check("a first due date is offered one cycle out",
+    suggestedFirstDue(quarterly, { start: "2026-10-01", today: TODAY }) === "2027-09-15");
+  check("a duty with no cycle is offered no date",
+    suggestedFirstDue(oneOff, { start: "2026-10-01", today: TODAY }) === null);
+  check("a contract that has not started yet anchors on the start date",
+    suggestedFirstDue(quarterly, { start: "2028-01-01", today: TODAY }) === "2028-04-01");
+
+  check("a date in the past is overdue", monitorState({ dueDate: "2027-05-01", history: [] }, TODAY) === "overdue");
+  check("a date inside the window is due", monitorState({ dueDate: "2027-07-01", history: [] }, TODAY) === "due");
+  check("a date beyond the window is on track", monitorState({ dueDate: "2027-12-01", history: [] }, TODAY) === "upcoming");
+  check("no date means watch-listed, not overdue", monitorState({ dueDate: null, history: [] }, TODAY) === "watch");
+  check("a closed one-off is met", monitorState({ dueDate: "2027-01-01", closed: true, history: [{}] }, TODAY) === "met");
+
+  const before = { dueDate: "2027-05-01", history: [] };
+  const after = recordPerformance(before, quarterly, { at: "2027-05-04", evidence: "Q1 report", by: "CM" });
+  check("recording performance rolls a recurring duty to the next cycle", after.dueDate === "2027-08-01");
+  check("recording performance keeps what was delivered and when",
+    after.history.length === 1 && after.history[0].evidence === "Q1 report" && after.history[0].forDue === "2027-05-01");
+  check("a rolled recurring duty is not closed", after.closed === false);
+  check("an overdue duty stops being overdue once recorded",
+    monitorState(before, TODAY) === "overdue" && monitorState(after, TODAY) === "upcoming");
+
+  const onceDone = recordPerformance({ dueDate: "2027-05-01", history: [] }, oneOff, { at: "2027-05-02", by: "CM" });
+  check("a one-off closes rather than rolling", onceDone.closed === true && monitorState(onceDone, TODAY) === "met");
+
+  const register = [
+    { dueDate: "2027-05-01", history: [] },
+    { dueDate: "2027-07-01", history: [] },
+    { dueDate: "2027-12-01", history: [{ at: "2027-03-01" }] },
+    { dueDate: null, history: [] },
+  ];
+  const sum = monitorSummary(register, TODAY);
+  check("the summary counts every state",
+    sum.overdue === 1 && sum.due === 1 && sum.upcoming === 1 && sum.watch === 1 && sum.total === 4);
+  check("at-risk is overdue plus due", sum.atRisk === 2);
+
+  const perf = performanceRecord(register, TODAY);
+  check("the performance record counts only scheduled duties", perf.scheduled === 3,
+    "a watch-listed duty has no date to have missed");
+  check("the performance record counts what was actually delivered",
+    perf.delivered === 1 && perf.events === 1);
+  check("the performance record names what passed unrecorded", perf.missed === 1);
+
+  // The obligations that genuinely need a scheduler: the date changes the position by
+  // itself, so the fact has to be captured on the day rather than computed on read.
+  const renewal = {
+    name: "Serve notice of non-renewal", clause: "4.1", frequency: "One-time (before each renewal)",
+    responsible: "Either Party", consequence: "It renews.",
+    lapse: { effect: "The Agreement renewed for a further 12 months.", irreversible: true },
+  };
+  const slaDuty = { name: "SLA report", clause: "6.3", frequency: "Monthly", responsible: "Supplier", consequence: "Service credits" };
+
+  check("a deadline obligation is recognised", isDeadline(renewal) === true);
+  check("an ordinary recurring duty is not one", isDeadline(slaDuty) === false);
+  check("a deadline is always tracked, whatever else it lacks",
+    assessObligation(renewal).track === true && assessObligation(renewal).mode === "deadline");
+  check("a deadline is treated as high importance", assessObligation(renewal).importance === "High");
+
+  const oneRow = (entry) => [{ index: 0, obligation: renewal, entry }];
+  check("the sweep does nothing before the date",
+    sweep(oneRow({ dueDate: "2027-07-01", history: [] }), TODAY).length === 0);
+  check("the sweep fires once the date has passed",
+    sweep(oneRow({ dueDate: "2027-05-01", history: [] }), TODAY).length === 1);
+  check("the sweep carries the effect, not just the date",
+    sweep(oneRow({ dueDate: "2027-05-01", history: [] }), TODAY)[0].effect === renewal.lapse.effect);
+  check("an ordinary overdue duty is never swept",
+    sweep([{ index: 0, obligation: slaDuty, entry: { dueDate: "2027-01-01", history: [] } }], TODAY).length === 0,
+    "overdue is derived on read and needs no job");
+
+  const hit = sweep(oneRow({ dueDate: "2027-05-01", history: [] }), TODAY)[0];
+  const recorded = applyLapse({ dueDate: "2027-05-01", history: [] }, { at: hit.dueDate, effect: hit.effect });
+  check("the lapse is recorded against the day it happened, not the day it was noticed",
+    recorded.lapsed.at === "2027-05-01" && recorded.lapsed.at !== TODAY);
+  check("the lapse leaves an entry in the history", recorded.history.length === 1
+    && /Lapsed:/.test(recorded.history[0].evidence));
+  check("a lapsed deadline reads as lapsed, not merely overdue",
+    monitorState(recorded, TODAY) === "lapsed");
+  check("the sweep is idempotent: a recorded lapse does not fire twice",
+    sweep(oneRow(recorded), TODAY).length === 0);
+  check("a lapse counts as at-risk", monitorSummary([recorded], TODAY).lapsed === 1
+    && monitorSummary([recorded], TODAY).atRisk === 1);
+
+  const deadlineRows = MOCK_OBLIGATIONS.filter(isDeadline);
+  check("the extracted register carries deadline obligations", deadlineRows.length === 4,
+    deadlineRows.map((o) => o.clause).join(","));
+  check("every deadline states what lapsing does",
+    deadlineRows.every((o) => o.lapse.effect.length > 20));
+  check("every deadline is trackable", deadlineRows.every((o) => assessObligation(o).track));
+
+  // Striking a clause out does not strike out the sentences that cite it.
+  const xrefGraph = buildReferenceGraph(full);
+  const citing = citationsOf(xrefGraph, "7.2");
+  check("the clauses citing a clause are found before it is deleted",
+    citing.map((c) => c.ref).join(",") === "7.4,11.1", citing.map((c) => c.ref).join(","));
+  check("each citation quotes the sentence that names it",
+    citing.every((c) => /clause 7\.2/i.test(c.sentence)));
+  const uncited = [...xrefGraph.blocks.keys()].find((r) => !(xrefGraph.inbound.get(r) || []).length);
+  check("a clause nothing points at reports no citations",
+    Boolean(uncited) && citationsOf(xrefGraph, uncited).length === 0, `checked ${uncited}`);
+  check("citations survive being asked for a missing clause", citationsOf(xrefGraph, "99.9").length === 0);
+
+  const cutDoc = deleteClauseBlock(full, "7.2", who);
+  const cutChange = cutDoc.changes.find((c) => c.clauseRef === "7.2");
+  const afterCut = resolveChanges(cutDoc, { [cutChange.id]: "accepted" });
+  check("after the deletion the graph can no longer see the broken pointer",
+    citationsOf(buildReferenceGraph(afterCut), "7.2").length === 0,
+    "which is exactly why the warning has to come first");
+  check("but the prose still names the clause that has gone",
+    /clause 7\.2/i.test(runsToText(afterCut.blocks.find((b) => b.ref === "7.4").runs)));
+
+  // An amendment against a register extracted before it existed.
+  const amendedBy = { id: "AMD-001", reason: "Extend the term and revise clause 11.1 insurance limits", effectiveDate: "2027-04-01" };
+  const impact = amendmentImpact(MOCK_OBLIGATIONS, amendedBy);
+  check("an amendment's named clauses are picked out of its reason", impact.refs.includes("11.1"));
+  check("obligations sitting on a named clause are flagged",
+    impact.named.some((o) => o.clause === "11.1"), impact.named.map((o) => o.clause).join(","));
+  check("obligations on clauses it does not name are left alone",
+    !impact.named.some((o) => o.clause === "6.3"));
+  check("an amendment naming nothing flags nothing",
+    amendmentImpact(MOCK_OBLIGATIONS, { id: "A", reason: "Correct a typo in the preamble" }).named.length === 0);
+  check("no amendment means no review", amendmentImpact(MOCK_OBLIGATIONS, null).named.length === 0);
+
+
+  // ---- The session snapshot, and refusing one written under another schema ----
+  //
+  // The point of the guard is that it fires on shapes this build has never seen, so the
+  // test drives it with exactly that: a snapshot from a schema that is not this one.
+  function fakeStorage(initial) {
+    const map = new Map(Object.entries(initial || {}));
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => map.set(k, v),
+      removeItem: (k) => map.delete(k),
+      _map: map,
+    };
+  }
+
+  const emptyStore = fakeStorage();
+  check("no snapshot reads as nothing to restore", readSnapshot(emptyStore) === null);
+
+  const roundTrip = fakeStorage();
+  writeSnapshot(roundTrip, { docVersion: "v1.1", sentToSupplier: true });
+  const readBack = readSnapshot(roundTrip);
+  check("a snapshot written by this build reads back", readBack?.docVersion === "v1.1");
+  check("and carries the schema it was written under", readBack?.__schema === SCHEMA);
+
+  const staleStore = fakeStorage({ [PERSIST_KEY]: JSON.stringify({ __schema: SCHEMA + 1, docVersion: "v9" }) });
+  check("a snapshot from another schema is discarded, not migrated", readSnapshot(staleStore) === null,
+    "a stale shape restored into this build's renderer throws on every reload");
+
+  const unversioned = fakeStorage({ [PERSIST_KEY]: JSON.stringify({ docVersion: "v1.0" }) });
+  check("a snapshot from before schemas existed is discarded too", readSnapshot(unversioned) === null);
+
+  const corruptStore = fakeStorage({ [PERSIST_KEY]: '{"__schema":' });
+  check("a truncated snapshot is discarded rather than thrown", readSnapshot(corruptStore) === null);
+
+  const notObject = fakeStorage({ [PERSIST_KEY]: '"a string"' });
+  check("a snapshot that is not an object is discarded", readSnapshot(notObject) === null);
+
+  const blockedStore = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } };
+  check("blocked storage reads as no snapshot", readSnapshot(blockedStore) === null);
+  check("blocked storage reports the write failed", writeSnapshot(blockedStore, { a: 1 }) === false);
+  check("blocked storage does not throw on clear", clearSnapshot(blockedStore) === false);
+
+  clearSnapshot(roundTrip);
+  check("clearing removes the snapshot", readSnapshot(roundTrip) === null);
+
+  // ---- The audit trail ----
+  const entryLegal = makeAuditEntry({ event: "Approved clause 7.2", role: "Legal", contractId: "CLM-2041", at: "2026-03-02T09:15:00.000Z" });
+  check("an entry records the role that acted", entryLegal.role === "Legal");
+  check("and the contract it was taken against", entryLegal.contractId === "CLM-2041");
+  check("and an ISO instant rather than a rendered time", entryLegal.at === "2026-03-02T09:15:00.000Z");
+  check("a role the data names a person for gets the person", entryLegal.actor === "R. Sandhu");
+  check("the label carries both the person and the role", actorLabel(entryLegal) === "R. Sandhu (Legal)");
+
+  const entryFinance = makeAuditEntry({ event: "Escalated", role: "Finance / Commercial Approver" });
+  check("a role with nobody named stays the role", entryFinance.actor === null);
+  check("and its label is the role alone", actorLabel(entryFinance) === "Finance / Commercial Approver");
+  check("an entry defaults its instant to now", !isNaN(new Date(entryFinance.at)));
+
+  const entryDemo = makeAuditEntry({ event: "Signed", role: "All Access (Demo Control)" });
+  check("an action taken under demo control is flagged as such", entryDemo.demoControl === true,
+    "an audit entry attributable to nobody should say so, not pick somebody");
+  check("an action taken under a product role is not", entryLegal.demoControl === false);
+  check("a role nobody named is not silently attributed", actorFor("Auditor (read-only)") === null);
+
+  // Sorting is why the instant is stored rather than the rendering: "02 Apr" sorts
+  // before "02 Mar" as a string and after it as a date.
+  const march = makeAuditEntry({ event: "March", role: "Legal", at: "2026-03-02T09:00:00.000Z" });
+  const april = makeAuditEntry({ event: "April", role: "Legal", at: "2026-04-02T09:00:00.000Z" });
+  const orderedTrail = newestFirst([march, april]);
+  check("the trail sorts newest first on the instant", orderedTrail[0].event === "April");
+  check("and sorting does not mutate the caller's array",
+    [march, april][0].event === "March");
+  check("a rendered time is a rendering, not the record",
+    formatAuditTime("2026-03-02T09:15:00.000Z").includes("2026")
+    && formatAuditTime("2026-03-02T09:15:00.000Z").includes("Mar"));
+  check("an unparseable instant renders as itself rather than Invalid Date",
+    formatAuditTime("not a date") === "not a date");
+
+  const auditTrail = [entryLegal, entryFinance, entryDemo, march, april];
+  check("the trail filters by acting role", filterEntries(auditTrail, { role: "Legal" }).length === 3);
+  check("the trail filters by contract", filterEntries(auditTrail, { contractId: "CLM-2041" }).length === 1);
+  check("the trail searches the event text", filterEntries(auditTrail, { query: "escalat" }).length === 1);
+  check("search reaches the actor's name", filterEntries(auditTrail, { query: "sandhu" }).length === 3);
+  check("no filter returns everything", filterEntries(auditTrail).length === auditTrail.length);
+  check("the role list is the roles present", rolesIn(auditTrail).includes("Legal") && rolesIn(auditTrail).length === 3);
+  check("the contract list carries the one contract plus the estate-level bucket",
+    contractsIn(auditTrail).length === 2 && contractsIn(auditTrail)[0] === "CLM-2041",
+    "entries taken before any contract existed are labelled, not dropped");
+
+  const auditCsv = auditToCsv([
+    makeAuditEntry({ event: 'Rejected "cap at 100%", per clause 7.2', role: "Legal", contractId: "CLM-2041", at: "2026-03-02T09:15:00.000Z" }),
+  ]);
+  const auditCsvLines = auditCsv.split(/\r\n/);
+  check("the export leads with a header row", auditCsvLines[0] === AUDIT_CSV_HEADER.join(","));
+  check("the export quotes a field containing a comma", auditCsvLines[1].includes('"Rejected ""cap at 100%"", per clause 7.2"'),
+    "an unquoted comma shifts every later column and the file is trusted anyway");
+  check("the export carries the ISO instant, not the rendering", auditCsvLines[1].startsWith("2026-03-02T09:15:00.000Z"));
+  check("the export names the actor and the role separately",
+    auditCsvLines[1].includes("R. Sandhu,Legal"));
+  check("an empty trail still exports a header", auditToCsv([]).split(/\r\n/).length === 1);
+
+  // Reading the trail is a permission of its own, held by the role that can do nothing else.
+  check("the auditor can read the trail", canReadAudit("Auditor (read-only)"));
+  check("demo control can read the trail", canReadAudit("All Access (Demo Control)"));
+  check("a role that can act on contracts cannot read the estate trail", !canReadAudit("Contract Manager"));
+  check("nor can the administrator, who configures rather than reviews", !canReadAudit("System Administrator"));
+
+
+  // ---- Which contract an entry belongs to ----
+  //
+  // The trail's whole job is saying what an action was taken on. An action on one
+  // contract filed against another is worse than an unfiled one, so the scoping rules
+  // get their own checks.
+  const onA = makeAuditEntry({ event: "Approved clause 7.2", role: "Legal", contractId: "CLM-2041" });
+  const onB = makeAuditEntry({ event: "Contract CLM-3300 quick-added", role: "Contract Manager", contractId: "CLM-3300" });
+  const estateWide = makeAuditEntry({ event: "Initiation opened from Salesforce", role: "Contract Manager", contractId: null });
+  const mixed = [onA, onB, estateWide];
+
+  check("a contract's trail is only its own events", forContract(mixed, "CLM-2041").length === 1);
+  check("another contract's events are not in it",
+    !forContract(mixed, "CLM-2041").some((e) => e.contractId === "CLM-3300"),
+    "an action on one contract filed against another is the one thing a trail must not do");
+  check("an estate-level event belongs to no contract's trail",
+    forContract(mixed, "CLM-2041").every((e) => e.contractId));
+  check("a contract nothing happened on has an empty trail", forContract(mixed, "CLM-9999").length === 0);
+
+  check("an entry with no contract is labelled rather than blanked", contractLabel(estateWide) === UNSCOPED);
+  check("an entry with a contract is labelled with it", contractLabel(onA) === "CLM-2041");
+
+  check("both contracts appear as filter options", contractsIn(mixed).includes("CLM-2041") && contractsIn(mixed).includes("CLM-3300"));
+  check("and the estate-level bucket appears once anything is in it", contractsIn(mixed).includes(UNSCOPED));
+  check("the estate-level bucket sorts after the contract numbers",
+    contractsIn(mixed).indexOf(UNSCOPED) === contractsIn(mixed).length - 1);
+  check("with nothing unscoped there is no estate-level option",
+    !contractsIn([onA, onB]).includes(UNSCOPED));
+  check("a single-contract trail offers exactly one option, so the filter has nothing to choose between",
+    contractsIn([onA]).length === 1, "which is why the page hides the control rather than showing a one-option dropdown");
+
+  check("the estate-level bucket is filterable", filterEntries(mixed, { contractId: UNSCOPED }).length === 1);
+  check("and filtering to a contract excludes the estate-level events",
+    filterEntries(mixed, { contractId: "CLM-2041" }).every((e) => e.contractId === "CLM-2041"));
+  check("search reaches the estate-level label", filterEntries(mixed, { query: "estate" }).length === 1);
+  check("the export writes the estate-level label, not an empty cell",
+    auditToCsv([estateWide]).includes(UNSCOPED));
+
+
+  // ---- The version moves when the document changes hands ----
+  //
+  // It used to move only when the counterparty acted, so a counter-proposal went back to
+  // them carrying the number they had given us: two materially different contracts under
+  // one version, one of them a .docx that had left the building.
+  const vDraft = buildDraft("hard_fm_global", {
+    contract_number: "CTR-V", supplier_name: "Meridian", client_name: "Client",
+    start_date: "2026-10-01", end_date: "2029-09-30", contract_value: "500000",
+    currency_code: "GBP", payment_terms_days: "12",
+  }, { version: "v1.0", status: "Draft" });
+  const vUs = { author: "D. Whitfield", role: "Contract Manager", date: "08 Sep" };
+  const vThem = { author: "Meridian CTS", role: "Supplier", date: "09 Sep" };
+  const vPay = (d) => runsToText(d.blocks.find((b) => b.ref === "5.1").runs);
+
+  check("a draft starts at v1.0", vDraft.meta.version === "v1.0");
+
+  const vR1 = applyRedline(vDraft, [{ clauseRef: "5.1", proposed: vPay(vDraft).replace("within 12 days", "within 6 days") }], vThem);
+  check("their redline comes back a version up", vR1.meta.version === "v1.1");
+
+  const vEdited = applyClauseEdit(vR1, "5.1", vPay(vR1).replace("within 6 days", "within 9 days"), vUs);
+  check("editing in place does not move the version on its own", vEdited.meta.version === "v1.1",
+    "the document has not gone anywhere yet");
+
+  const vSent = handToCounterparty(vEdited, vUs.author);
+  check("sending our counter back moves it", vSent.meta.version === "v1.2",
+    "this is the exchange that used to leave the version standing still");
+  check("and marks our changes as sent", vSent.changes.filter((c) => c.author === vUs.author).every((c) => c.sent));
+  check("and says what the document now is", vSent.meta.status === "Counter-proposal sent");
+  check("theirs is not marked sent by our hand-over",
+    vSent.changes.filter((c) => c.author === vThem.author).every((c) => !c.sent));
+
+  const vRev = applySupplierRevision(vSent, "5.1", vPay(vSent).replace("within 9 days", "within 8 days"), vThem);
+  check("their revision moves it again", vRev.meta.version === "v1.3");
+
+  const vSent2 = handToCounterparty(applyClauseEdit(vRev, "5.1", vPay(vRev).replace("within 8 days", "within 7 days"), vUs), vUs.author);
+  check("and our second counter again", vSent2.meta.version === "v1.4");
+
+  const vSeen = [vDraft, vR1, vSent, vRev, vSent2].map((d) => d.meta.version);
+  check("five exchanges produce five distinct versions", new Set(vSeen).size === 5, vSeen.join(" -> "));
+  check("the version never moves backwards",
+    vSeen.every((v, i) => i === 0 || Number(v.slice(3)) > Number(vSeen[i - 1].slice(3))));
+  check("bumping is minor-only, so v1.9 goes to v1.10 rather than v2.0", bumpVersion("v1.9") === "v1.10");
+  check("an unreadable version falls back rather than throwing", bumpVersion("draft") === "v1.1");
+
+  // ---- Approving a counter-proposal before it is sent ----
+  //
+  // Deciding their changes is routed by the playbook. Authoring ours was governed by
+  // nothing, so our wording went to the counterparty having been read by one person.
+  const gateChanges = vEdited.changes.filter((c) => c.author === vUs.author && !c.sent);
+  check("our unsent counter is what the gate is asked about", gateChanges.length === 1);
+
+  const rows = counterApprovalRows(gateChanges, {});
+  check("the gate places our counter in the playbook band exactly as it would theirs",
+    Boolean(rows[0].assessment), rows[0].assessment?.verdict);
+  check("an unapproved counter is not ready to send", !counterReady(rows));
+  check("and the clause waiting is named", outstandingCounters(rows)[0].change.clauseRef === "5.1");
+
+  // Asserted against literals, not against the row's own fields. Reading recordedBy back
+  // out of the object it came from passes whatever that field happens to say, which is
+  // how a broken routing table goes green.
+  //
+  // 9 days is past the walk-away line on clause 5.1 (standard 60, fallback 45, walk away
+  // under 30), so this is the escalation path.
+  check("a counter past the walk-away line escalates", rows[0].assessment.position === "walkAway");
+  check("and the playbook names the escalation role", rows[0].requiredRole === "Head of Finance",
+    rows[0].requiredRole);
+  check("which is not a seat anybody logs in as, so the owning desk records it",
+    rows[0].recordedBy === "Finance / Commercial Approver" && rows[0].escalated === true,
+    `${rows[0].recordedBy}, escalated=${rows[0].escalated}`);
+  check("demo control may always record it", canApproveCounter("All Access (Demo Control)", rows[0]));
+  check("an auditor may not", !canApproveCounter("Auditor (read-only)", rows[0]),
+    "a role that can act on nothing cannot approve our negotiating position either");
+  check("Finance records this one", canApproveCounter("Finance / Commercial Approver", rows[0]));
+  check("Legal does not", !canApproveCounter("Legal", rows[0]));
+  check("nor does the Contract Manager", !canApproveCounter("Contract Manager", rows[0]));
+  check("nor the escalation role itself, which nobody can select",
+    !canApproveCounter("Head of Finance", rows[0]));
+
+  // The ordinary case, and the one the shipped demo actually hits: inside the fallback
+  // band the approving role is a real seat and there is no escalation.
+  const fallbackRow = counterApprovalRows([{
+    id: "c-fb", clauseRef: "5.1", clauseHeading: "Payment terms",
+    playbookCode: gateChanges[0].playbookCode,
+    previous: vPay(vR1), proposed: vPay(vR1).replace(/within \d+ days/, "within 45 days"),
+    author: vUs.author,
+  }], {})[0];
+  check("a counter inside the fallback band needs the clause's approving role",
+    fallbackRow.requiredRole === "Finance / Commercial Approver", fallbackRow.requiredRole);
+  check("and is not an escalation", fallbackRow.escalated === false);
+  check("so the desk approves it directly", canApproveCounter("Finance / Commercial Approver", fallbackRow));
+  check("and it still has to be approved before it is sent", !counterReady([fallbackRow]));
+
+  const approvedRows = counterApprovalRows(gateChanges, { [gateChanges[0].id]: { by: "Legal", at: "08 Sep" } });
+  check("once approved it is ready to send", counterReady(approvedRows));
+  check("and nothing is outstanding", outstandingCounters(approvedRows).length === 0);
+  check("an approved row cannot be approved again", !canApproveCounter("All Access (Demo Control)", approvedRows[0]));
+
+  // A counter at or better than our own standard position needs nobody: requiring a
+  // signature to propose our own wording is how approvals become things people click through.
+  // The playbook's standard for clause 5.1 is 60 days, so a counter at 60 is our own
+  // position and there is no exception for anybody to approve.
+  const atStandard = counterApprovalRows([{
+    id: "c-std", clauseRef: "5.1", clauseHeading: "Payment terms",
+    playbookCode: gateChanges[0].playbookCode,
+    previous: vPay(vR1), proposed: vPay(vR1).replace(/within \d+ days/, "within 60 days"),
+    author: vUs.author,
+  }], {});
+  check("a counter back to our own standard position needs no approval",
+    !atStandard[0].needsApproval && atStandard[0].approved,
+    atStandard[0].assessment?.verdict);
+  check("so a document carrying only that is ready to send", counterReady(atStandard));
+  check("no counters at all is trivially ready", counterReady(counterApprovalRows([], {})));
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) {

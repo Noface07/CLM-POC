@@ -223,6 +223,29 @@ body { margin: 0; }
 .clm-chev { transition: transform 120ms ease; flex: none; opacity: 0.55; }
 .clm-chev.is-open { transform: rotate(180deg); }
 
+/* A count sits inside its own segment, so the amber never has to carry meaning alone. */
+/* Warning shown before a clause is struck out, listing what still cites it. */
+.clm-xref-warning {
+  border: 1px solid var(--color-accent); background: var(--color-accent-100);
+  padding: 10px 11px; margin: 4px 0;
+}
+.clm-xref-head {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-family: var(--font-heading); font-weight: 700; font-size: 12.5px;
+  color: var(--color-accent-800); margin-bottom: 5px;
+}
+.clm-xref-note { margin: 0 0 7px; font-size: 11.5px; line-height: 1.55; opacity: 0.8; }
+.clm-xref-cite {
+  margin: 0 0 5px; font-size: 12px; line-height: 1.5;
+  padding-left: 8px; border-left: 2px solid var(--color-accent-300);
+}
+
+.clm-seg-label {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700; color: #fff; letter-spacing: 0.02em;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 35%); pointer-events: none;
+}
+
 /* Version comparison */
 
 .clm-compare { border: 1px solid var(--color-divider); background: var(--color-surface); }
@@ -425,6 +448,13 @@ button.clm-compare-head:hover { background: color-mix(in srgb, var(--color-text)
   font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
 
+/* The value is absolutely positioned in a gutter to the right of the bar, which runs off
+   a narrow screen. Below the breakpoint it rejoins the flow and sits after the bar. */
+@media (max-width: 860px) {
+  .clm-row-value { position: static; transform: none; white-space: nowrap; }
+  .clm-track { display: flex; align-items: center; gap: 6px; }
+}
+
 .clm-fill-chevron { clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%); }
 
 .clm-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; }
@@ -514,3 +544,42 @@ button.clm-compare-head:hover { background: color-mix(in srgb, var(--color-text)
 
 .nav { gap: var(--space-3); }
 .clm-nav-icons { display: inline-flex; align-items: center; gap: 2px; }
+
+/* A wide table on a narrow screen scrolls inside its own frame. Without this the page
+   itself scrolls sideways and the nav goes with it. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll > .table { min-width: 640px; }
+
+/* The control that opens a contract from its row. It looks like the text it replaced,
+   because it is the text it replaced; what it adds is a tab stop and a name. */
+.clm-row-open {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+  font-weight: inherit; cursor: pointer; text-align: left;
+}
+.clm-row-open:hover { text-decoration: underline; }
+
+/* The live region is always mounted, so a screen reader is watching it before the first
+   notice arrives. A region that appears at the same moment as its content announces
+   nothing. */
+.clm-notice-live { position: fixed; inset: auto 0 0 0; pointer-events: none; z-index: 60; }
+.clm-notice-live .clm-notice { pointer-events: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .clm-spin { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+/* Approving a counter-proposal before it goes back to the counterparty. */
+.clm-counter-gate {
+  border: 1px solid var(--color-divider); background: var(--color-neutral-100);
+  display: grid; gap: 1px;
+}
+.clm-counter-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px var(--space-3); background: var(--color-bg);
+}
+.clm-counter-clause { font-size: 12.5px; min-width: 190px; }
+.clm-counter-note { font-size: 11.5px; opacity: 0.65; flex: 1 1 240px; line-height: 1.45; }

@@ -153,6 +153,118 @@ export function StatusStackBar({ segments, fills = BAND_FILL, emptyNote }) {
   );
 }
 
+// Obligation state is a STATUS scale, not a category scale: the four values are ordered
+// and reserved, so they never stand in for "series 4". The neutral is deliberately low
+// in chroma because a watch-listed duty is the recessive case, and it is stepped away
+// from the green so the two are still separable (ΔE 18.5 normal vision, 14.6 deutan).
+export const OBLIGATION_FILL = {
+  overdue: STATUS_FILL.critical,
+  due: STATUS_FILL.warning,
+  onTrack: STATUS_FILL.good,
+  watch: "#4a5568",
+};
+
+export const OBLIGATION_STATES = [
+  { key: "overdue", label: "Overdue", mark: "!" },
+  { key: "due", label: "Due soon", mark: "•" },
+  { key: "onTrack", label: "On track", mark: "✓" },
+  { key: "watch", label: "Watch-listed", mark: "~" },
+];
+
+/**
+ * One stacked bar per contract: which contracts owe what, and how much of it has
+ * slipped. Rows are ordered by what has gone wrong, because that is the reading order
+ * somebody scanning an estate actually wants.
+ *
+ * @param {Array} rows [{ id, supplier, counts: {overdue, due, onTrack, watch} }]
+ */
+export function ObligationHealthBars({ rows, emptyNote, labelWidth = 150 }) {
+  const [point, setPoint] = useState(null);
+  const [table, setTable] = useState(false);
+
+  if (!rows.length) return <div className="clm-empty">{emptyNote || "Nothing to show yet."}</div>;
+
+  const widest = Math.max(1, ...rows.map((r) => OBLIGATION_STATES.reduce((n, s) => n + (r.counts[s.key] || 0), 0)));
+
+  return (
+    <div>
+      <div style={{ display: "grid", gap: 6, position: "relative" }}>
+        {rows.map((row) => {
+          const total = OBLIGATION_STATES.reduce((n, s) => n + (row.counts[s.key] || 0), 0);
+          return (
+            <div key={row.id} className="clm-row">
+              <div
+                className="clm-row-label"
+                style={{ width: labelWidth, fontWeight: row.counts.overdue ? 700 : 400 }}
+                title={`${row.id} · ${row.supplier}`}
+              >
+                {row.id}
+                <span style={{ display: "block", fontSize: 10.5, opacity: 0.5, fontWeight: 400 }}>{row.supplier}</span>
+              </div>
+
+              <div className="clm-track is-open" style={{ height: 26 }}>
+                <div style={{ display: "flex", gap: 2, width: `${(total / widest) * 88}%`, height: "100%" }}>
+                  {OBLIGATION_STATES.filter((s) => row.counts[s.key] > 0).map((s) => {
+                    const value = row.counts[s.key];
+                    return (
+                      <span
+                        key={s.key}
+                        style={{ flex: value, background: OBLIGATION_FILL[s.key], position: "relative" }}
+                        onMouseEnter={(e) => {
+                          const box = e.currentTarget.closest(".clm-track").getBoundingClientRect();
+                          const own = e.currentTarget.getBoundingClientRect();
+                          setPoint({
+                            x: own.left - box.left + own.width / 2,
+                            y: own.top - box.top - 4,
+                            label: `${row.id} · ${s.label}: ${value}`,
+                          });
+                        }}
+                        onMouseLeave={() => setPoint(null)}
+                      >
+                        {value > 0 && (
+                          <span className="clm-seg-label" aria-hidden="true">{value}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+                <span className="clm-row-value" style={{ left: `calc(${(total / widest) * 88}% + 9px)`, color: "var(--color-text)" }}>
+                  {total}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+        <Tooltip point={point} />
+      </div>
+
+      {/* Status never travels as colour alone: every entry carries a mark and a word. */}
+      <div className="clm-legend" style={{ marginTop: 10 }}>
+        {OBLIGATION_STATES.map((s) => (
+          <span key={s.key}>
+            <i className="clm-swatch" style={{ background: OBLIGATION_FILL[s.key] }} />
+            <span aria-hidden="true" style={{ marginRight: 3, opacity: 0.6 }}>{s.mark}</span>
+            {s.label}{" "}
+            <strong style={{ fontWeight: 600 }}>
+              {rows.reduce((n, r) => n + (r.counts[s.key] || 0), 0)}
+            </strong>
+          </span>
+        ))}
+      </div>
+
+      <TableView
+        open={table} onToggle={() => setTable((t) => !t)}
+        columns={["Contract", "Supplier", ...OBLIGATION_STATES.map((s) => s.label), "Total"]}
+        rows={rows.map((r) => [
+          r.id, r.supplier,
+          ...OBLIGATION_STATES.map((s) => r.counts[s.key] || 0),
+          OBLIGATION_STATES.reduce((n, s) => n + (r.counts[s.key] || 0), 0),
+        ])}
+      />
+    </div>
+  );
+}
+
 export const SEQUENTIAL = ["#f7a893", "#f5836a", "#f05a3c", "#ec3013", "#c92309", "#a01804", "#7c1405"];
 
 const SURFACE = "#eae9e9";

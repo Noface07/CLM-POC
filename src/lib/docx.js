@@ -33,6 +33,18 @@ function runsToXml(runs, opts) {
       return `<w:ins w:id="${id}" w:author="${esc(run.author || "Supplier")}" w:date="${isoDate(run.date)}">`
         + `<w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">${esc(run.text)}</w:t></w:r></w:ins>`;
     }
+    // Text one party inserted and the other then struck out. OOXML nests the deletion
+    // inside the insertion, which is how Word keeps both attributions: their proposal,
+    // our strike. Flattening it to a plain deletion would credit us with removing
+    // wording that was never in the contract.
+    if (run.t === "del" && run.wasProposedBy) {
+      const insId = revisionId++;
+      const delId = revisionId++;
+      return `<w:ins w:id="${insId}" w:author="${esc(run.wasProposedBy)}" w:date="${isoDate(run.date)}">`
+        + `<w:del w:id="${delId}" w:author="${esc(run.author || "Client")}" w:date="${isoDate(run.date)}">`
+        + `<w:r><w:delText xml:space="preserve">${esc(run.text)}</w:delText></w:r>`
+        + `</w:del></w:ins>`;
+    }
     if (run.t === "del") {
       const id = revisionId++;
       return `<w:del w:id="${id}" w:author="${esc(run.author || "Supplier")}" w:date="${isoDate(run.date)}">`

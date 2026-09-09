@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { MessageSquare, Check, X, CornerDownRight, Pencil, Trash2, Scissors } from "lucide-react";
+import { MessageSquare, Check, X, CornerDownRight, Pencil, Trash2, Scissors, Link2Off } from "lucide-react";
 import { Tag, Btn, GRAY, AMBER, GREEN, RED } from "../lib/ui.jsx";
 import { runsToText } from "../lib/redline.js";
 import { CLAUSE_DRAG_TYPE } from "./ClausePalette.jsx";
@@ -21,7 +21,9 @@ function RunSpan({ run, decision }) {
       <span
         className="clm-del"
         style={decision === "rejected" ? { textDecoration: "none", color: "inherit", background: "transparent" } : undefined}
-        title={`Deleted by ${run.author || "counterparty"}`}
+        title={run.wasProposedBy
+          ? `Proposed by ${run.wasProposedBy}, struck by ${run.author || "us"} in counter-proposal`
+          : `Deleted by ${run.author || "counterparty"}`}
       >{run.text}</span>
     );
   }
@@ -107,6 +109,7 @@ export default function DocumentView({
   onAddComment,
   onEditClause,
   onDeleteClause,
+  citationsFor,
   onDropClause,
   onDiscardChange,
   currentAuthor,          // whoever is looking: they may withdraw their own changes
@@ -124,6 +127,7 @@ export default function DocumentView({
   const [editOn, setEditOn] = useState(null);
   const [editDraft, setEditDraft] = useState("");
   const [dropOn, setDropOn] = useState(null);
+  const [deleteOn, setDeleteOn] = useState(null);
   const paperRef = useRef(null);
 
   function startEdit(block) {
@@ -273,6 +277,33 @@ export default function DocumentView({
                   onDropClause(code, block.ref);
                 } : undefined}
               >
+                {deleteOn?.ref === block.ref && (
+                  <div className="clm-xref-warning">
+                    <div className="clm-xref-head">
+                      <Link2Off size={13} />
+                      Striking out {block.ref} leaves {deleteOn.cites.length} clause
+                      {deleteOn.cites.length === 1 ? "" : "s"} pointing at nothing
+                    </div>
+                    <p className="clm-xref-note">
+                      These sentences name {block.ref}. Deleting it does not delete them, and once the clause is gone
+                      the reference graph cannot find the broken pointer either.
+                    </p>
+                    {deleteOn.cites.map((c) => (
+                      <p key={c.ref} className="clm-xref-cite">
+                        <strong>{c.ref}</strong> {c.heading && <span style={{ opacity: 0.7 }}>{c.heading}</span>}
+                        <span style={{ display: "block", opacity: 0.8 }}>“{c.sentence}”</span>
+                      </p>
+                    ))}
+                    <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                      <Btn small variant="secondary" icon={Scissors} onClick={() => {
+                        onDeleteClause(deleteOn.ref);
+                        setDeleteOn(null); setEditOn(null); setEditDraft("");
+                      }}>Strike it out anyway</Btn>
+                      <Btn small variant="ghost" onClick={() => setDeleteOn(null)}>Keep the clause</Btn>
+                    </div>
+                  </div>
+                )}
+
                 {editOn === block.ref ? (
                   <div className="clm-clause-editor">
                     <div className="clm-clause-editor-head">
@@ -298,7 +329,12 @@ export default function DocumentView({
                         <Btn
                           small variant="ghost" icon={Scissors}
                           title="Propose striking this clause out of the contract"
-                          onClick={() => { onDeleteClause(block.ref); setEditOn(null); setEditDraft(""); }}
+                          onClick={() => {
+                            const cites = citationsFor?.(block.ref) || [];
+                            if (cites.length) { setDeleteOn({ ref: block.ref, cites }); return; }
+                            onDeleteClause(block.ref);
+                            setEditOn(null); setEditDraft("");
+                          }}
                         >Delete clause</Btn>
                       )}
                       {onDiscardChange && myChangeOn(block) && (

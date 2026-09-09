@@ -16,6 +16,8 @@ import { downloadDocx } from "../lib/docx.js";
 import { formatMoney, mustEscalate } from "../data/contracts.js";
 import { pendingChangeCount } from "../lib/redline.js";
 import { ALL_ACCESS_ROLE } from "../lib/rbac.js";
+import { newestFirst, formatAuditTime, actorLabel, auditCsvBlob, forContract } from "../lib/audit.js";
+import { downloadBlob } from "../lib/zip.js";
 
 const REVIEW_DECISION_COLOR = { approved: GREEN, rejected: RED, changes: AMBER, delegated: GRAY, pending: GRAY };
 
@@ -27,7 +29,7 @@ export default function WorkspacePage({
   // document
   activeDoc, docVersion, setDocVersion, versions, watermark, changeDecisions,
   onAcceptChange, onRejectChange, onAddComment, onReplyToComment, onResolveComment,
-  onEditClause, onInsertClause, onDeleteClause, onDiscardChange, currentAuthor, versionHistory, docHistory,
+  onEditClause, onInsertClause, onDeleteClause, citationsFor, onDiscardChange, currentAuthor, versionHistory, docHistory,
   supplierAccepted,
   // review
   reviewers, approvals, reviewInvalidated, reviewActionKey, setReviewActionKey, reviewCommentDraft,
@@ -35,6 +37,8 @@ export default function WorkspacePage({
   resubmitForReview, reviewComplete,
   // negotiation
   sentToSupplier, redlineReceived, onSendToSupplier, counterChanges = [], onSendCounter,
+  counterRows = [], counterCleared = true, counterBlocked, onApproveCounter, canApproveCounter,
+  findingsStale,
   aiChange, aiChangeLoading, runChangeIntelligence, changeRunMeta,
   exceptions, exceptionDecisions, assessFor, onOpenException, decide,
   changeTypeRoute, approvalMatrix, contractValue,
@@ -49,8 +53,13 @@ export default function WorkspacePage({
   auditLog, onBack, onGoToObligations, undecidedCount, blockedCount, flash,
 }) {
   const pendingChanges = activeDoc ? pendingChangeCount(activeDoc, changeDecisions) : 0;
-  const frozen = docVersion === "executed" || docVersion === "v2.1";
+  const frozen = docVersion === "executed" || docVersion === "amended";
   const allReviewersApproved = Object.values(approvals).every((a) => a.status === "approved");
+
+  // This panel is inside a contract, so it is that contract's trail. The estate-wide view
+  // is the Audit trail tab, and the difference is stated rather than left to be noticed.
+  const contractAudit = forContract(auditLog, contract.id);
+  const estateCount = auditLog.length - contractAudit.length;
 
   return (
     <>
@@ -142,18 +151,69 @@ export default function WorkspacePage({
           </p>
         )}
         {counterChanges.length > 0 && (
-          <>
-            <p style={{ margin: 0, fontSize: 13.5, color: "var(--color-accent-700)" }}>
+          <div style={{ width: "100%" }}>
+            <p style={{ margin: "0 0 var(--space-3)", fontSize: 13.5, color: "var(--color-accent-700)" }}>
               You have changed {counterChanges.length === 1 ? "a clause" : `${counterChanges.length} clauses`} on
               their redline. That is a counter-proposal, not a decision, so it goes back to {supplier.name} for
-              another round. Nothing they have not seen can reach signature.
+              another round. Nothing they have not seen can reach signature, and nothing we have not approved
+              reaches them.
             </p>
+
+            <div className="clm-counter-gate">
+              {counterRows.map((row) => {
+                const mine = canApproveCounter?.(row);
+                return (
+                  <div key={row.change.id} className="clm-counter-row">
+                    <span className="clm-counter-clause">
+                      <strong>{row.change.clauseRef}</strong> {row.change.clauseHeading}
+                    </span>
+                    {!row.needsApproval ? (
+                      <>
+                        <Tag c={GREEN} style={{ fontSize: 10 }}>at standard</Tag>
+                        <span className="clm-counter-note">
+                          Our own standard position, so there is no exception for anyone to approve.
+                        </span>
+                      </>
+                    ) : row.approved ? (
+                      <>
+                        <Tag c={GREEN} style={{ fontSize: 10 }}>approved</Tag>
+                        <span className="clm-counter-note">
+                          {row.requiredRole} · recorded by {row.approval.by} at {row.approval.at}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Tag c={row.assessment?.position === "walkAway" ? RED : AMBER} style={{ fontSize: 10 }}>
+                          needs {row.requiredRole}
+                        </Tag>
+                        <span className="clm-counter-note">{row.assessment?.verdict}</span>
+                        {!readOnly && (
+                          <Btn
+                            small variant={mine ? "primary" : "secondary"} disabled={!mine}
+                            onClick={() => onApproveCounter?.(row.change.id)}
+                            title={mine
+                              ? `Approve as ${row.recordedBy}`
+                              : `Only ${row.recordedBy} can approve this position. Switch role to record it.`}
+                          >Approve</Btn>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
             {!readOnly && (
-              <Btn onClick={onSendCounter} icon={Send} variant="primary">
-                Send back to {supplier.name}
-              </Btn>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: "var(--space-3)" }}>
+                <Btn onClick={onSendCounter} icon={Send} variant="primary" disabled={!counterCleared}>
+                  Send back to {supplier.name}
+                </Btn>
+                {!counterCleared && (
+                  <span style={{ fontSize: 12.5, color: "var(--color-accent-700)" }}>{counterBlocked}</span>
+                )}
+              </div>
             )}
-          </>
+          </div>
         )}
         {aiChange && readyForSignature && pendingChanges > 0 && (
           <p style={{ margin: 0, fontSize: 13.5, color: "var(--color-accent-700)" }}>
@@ -274,7 +334,7 @@ export default function WorkspacePage({
                 <Btn
                   icon={Download} variant="secondary" small style={{ marginLeft: "auto" }}
                   onClick={() => {
-                    downloadDocx(activeDoc, `${contract.id}_${docVersion}.docx`, { watermark });
+                    downloadDocx(activeDoc, `${contract.id}_${activeDoc?.meta?.version || docVersion}.docx`, { watermark });
                     flash?.("Downloaded as Word. Tracked changes and comments are live in the file.");
                   }}
                 >Download .docx</Btn>
@@ -317,6 +377,7 @@ export default function WorkspacePage({
                 onResolveComment={onResolveComment}
                 onEditClause={onEditClause}
                 onDeleteClause={onDeleteClause}
+                citationsFor={citationsFor}
                 onDropClause={onInsertClause}
                 onDiscardChange={onDiscardChange}
                 currentAuthor={currentAuthor}
@@ -412,18 +473,40 @@ export default function WorkspacePage({
 
           {lifecycle}
 
-          {auditLog.length > 0 && (
-            <Fold title="Audit trail" note={`${auditLog.length} events`} defaultOpen={false}>
+          {contractAudit.length > 0 && (
+            <Fold title="Audit trail" note={`${contractAudit.length} events`} defaultOpen={false}>
               <p style={{ fontSize: 11.5, opacity: 0.5, margin: "0 0 8px" }}>
-                Every approval, tracked-change decision, exception decision and signature event, timestamped.
+                Every approval, tracked-change decision, exception decision and signature event <strong>on
+                {" "}{contract.id}</strong>, with the role that took it and the instant it was taken.
+                {estateCount > 0 && (
+                  <> {estateCount} further estate-level event{estateCount === 1 ? " is" : "s are"} not shown here
+                  because {estateCount === 1 ? "it was" : "they were"} not taken on this contract; the Audit trail
+                  tab has the whole estate.</>
+                )}
               </p>
               <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                {auditLog.slice().reverse().map((entry, i) => (
-                  <div key={i} style={{ display: "flex", gap: "var(--space-3)", padding: "6px 0", borderBottom: "1px solid var(--color-divider)" }}>
-                    <span className="text-muted" style={{ fontSize: 11, flex: "none", width: 96 }}>{entry.time}</span>
-                    <span style={{ fontSize: 12.5 }}>{entry.label}</span>
+                {newestFirst(contractAudit).map((entry, i) => (
+                  <div key={`${entry.at}-${i}`} style={{ display: "flex", gap: "var(--space-3)", padding: "6px 0", borderBottom: "1px solid var(--color-divider)" }}>
+                    <span className="text-muted" style={{ fontSize: 11, flex: "none", width: 116 }}>
+                      <time dateTime={entry.at}>{formatAuditTime(entry.at)}</time>
+                    </span>
+                    <span style={{ fontSize: 12.5 }}>
+                      {entry.event}
+                      <span className="text-muted" style={{ display: "block", fontSize: 11, marginTop: 1 }}>
+                        {actorLabel(entry)}
+                      </span>
+                    </span>
                   </div>
                 ))}
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Btn
+                  small variant="secondary" icon={Download}
+                  onClick={() => downloadBlob(
+                    auditCsvBlob(contractAudit),
+                    `audit-trail-${contract.id}-${new Date().toISOString().slice(0, 10)}.csv`
+                  )}
+                >Export CSV</Btn>
               </div>
             </Fold>
           )}
@@ -458,6 +541,25 @@ export default function WorkspacePage({
               </p>
             )}
           </div>
+
+          {findingsStale && (
+            <div className="clm-readonly-banner" style={{ margin: 0, borderColor: "var(--color-accent-300)", background: "var(--color-accent-100)" }}>
+              <RefreshCw size={15} />
+              <span style={{ fontSize: 12.5 }}>
+                <strong>These findings are out of date.</strong> The document changed after they were derived, so
+                what is below was measured against wording that is no longer in it, and any clause you have just
+                written carries no band at all.
+                <span style={{ opacity: 0.65 }}> {findingsStale.reason} ({findingsStale.at}).</span>
+                {!readOnly && (
+                  <Btn
+                    small variant="secondary" icon={RefreshCw} spin={aiChangeLoading}
+                    onClick={runChangeIntelligence} disabled={aiChangeLoading}
+                    style={{ marginLeft: 8, verticalAlign: "middle" }}
+                  >Re-run</Btn>
+                )}
+              </span>
+            </div>
+          )}
 
           {aiChange && silentClauses?.length > 0 && (
             <div style={{ border: "1px solid var(--color-accent-300)", background: "var(--color-accent-100)", padding: 10 }}>

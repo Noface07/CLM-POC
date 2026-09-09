@@ -55,7 +55,7 @@ function Milestone({ label, date, note, tone, passed }) {
 
 export default function PostExecution({
   contract, canManageLifecycle, today = new Date(),
-  obligations, trackedCount, validatedCount,
+  obligations, trackedCount, validatedCount, monitor,
   amendment, onCreateAmendment, onAdvanceAmendment, parentVersion,
   expiryStage, onExpiryReminders, onExpire,
   renewalTaskCreated, onCreateRenewal,
@@ -151,10 +151,12 @@ export default function PostExecution({
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <Tag c={health === "good" ? GREEN : health === "bad" ? RED : AMBER} style={{ fontSize: 10.5 }}>
-              {validatedCount}/{trackedCount} validated
+              {validatedCount}/{trackedCount} validated{monitor?.overdue ? `, ${monitor.overdue} overdue` : ""}
             </Tag>
             <span style={{ fontSize: 12.5, opacity: 0.75, lineHeight: 1.55, flex: 1, minWidth: 200 }}>
-              {validationGap > 0
+              {monitor?.overdue > 0
+                ? `${monitor.overdue} obligation${monitor.overdue === 1 ? " has" : "s have"} passed the date with nothing recorded against ${monitor.overdue === 1 ? "it" : "them"}. That is the performance record, and it is the thing a renewal conversation turns on.`
+                : validationGap > 0
                 ? `${validationGap} trackable obligation${validationGap === 1 ? "" : "s"} still unvalidated, so ${validationGap === 1 ? "it fires" : "they fire"} no reminders. On a renewal decision this is the number that matters: an unvalidated obligation has no performance record to argue from.`
                 : "Every trackable obligation is validated and firing reminders."}
             </span>

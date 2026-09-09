@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus.js";
 import { PenLine, X, ShieldCheck, AlertTriangle } from "lucide-react";
 import { Tag, Btn, Field, GRAY, kicker } from "../lib/ui.jsx";
 
 export default function SignCeremony({
   open, onClose, onSign, party, entity, expectedName, defaultTitle, documentTitle, clauseCount,
 }) {
+  const focusRef = useModalFocus(open, onClose);
   const [typedName, setTypedName] = useState("");
   const [title, setTitle] = useState(defaultTitle || "Authorised signatory");
   const [intent, setIntent] = useState(false);
@@ -28,7 +30,10 @@ export default function SignCeremony({
 
   return (
     <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" style={{ width: "min(600px, 95vw)" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        ref={focusRef} tabIndex={-1} className="dialog" style={{ width: "min(600px, 95vw)" }}
+        onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
+      >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
           <div>
             <div className="card-kicker">{party}</div>

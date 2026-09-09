@@ -59,22 +59,22 @@ export default function ContractsPage({
       <div style={{ display: "flex", alignItems: "flex-end", gap: "var(--space-4)", padding: "var(--space-3) 0",
         borderBottom: "2px solid var(--color-divider)", marginBottom: "var(--space-2)", flexWrap: "wrap" }}>
         <div className="field" style={{ minWidth: 150, margin: 0 }}><label>Status</label>
-          <select className="input" value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}>
+          <select className="input" aria-label="Filter by status" value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}>
             {statusOptions.map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
         <div className="field" style={{ minWidth: 190, margin: 0 }}><label>Supplier</label>
-          <select className="input" value={filters.supplier} onChange={(e) => setFilters((f) => ({ ...f, supplier: e.target.value }))}>
+          <select className="input" aria-label="Filter by supplier" value={filters.supplier} onChange={(e) => setFilters((f) => ({ ...f, supplier: e.target.value }))}>
             {supplierOptions.map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
         <div className="field" style={{ minWidth: 160, margin: 0 }}><label>Service category</label>
-          <select className="input" value={filters.category} onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}>
+          <select className="input" aria-label="Filter by service category" value={filters.category} onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}>
             {categoryOptions.map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
         <div className="field" style={{ minWidth: 140, margin: 0 }}><label>Term</label>
-          <select className="input" value={filters.term} onChange={(e) => setFilters((f) => ({ ...f, term: e.target.value }))}>
+          <select className="input" aria-label="Filter by term" value={filters.term} onChange={(e) => setFilters((f) => ({ ...f, term: e.target.value }))}>
             {["All", "Fixed term", "Evergreen"].map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
@@ -89,6 +89,7 @@ export default function ContractsPage({
         </span>
       </div>
 
+      <div className="table-scroll">
       <table className="table">
         <thead>
           <tr>
@@ -98,9 +99,17 @@ export default function ContractsPage({
         </thead>
         <tbody>
           {filtered.map((c) => (
+            // The row stays clickable because that is how a table of contracts is used
+            // with a mouse. The control that opens it is the button in the first cell:
+            // a row is not a control, so a keyboard never reaches one, and opening a
+            // contract is the only thing this page is for.
             <tr key={c.id} style={{ cursor: "pointer" }} onClick={() => onOpen(c)}>
               <td style={{ fontWeight: 600 }}>
-                {c.id}
+                <button
+                  type="button" className="clm-row-open"
+                  aria-label={`Open ${c.id}, ${c.supplier}`}
+                  onClick={(e) => { e.stopPropagation(); onOpen(c); }}
+                >{c.id}</button>
                 {c.live && <Tag c={GREEN} style={{ fontSize: 9.5, marginLeft: 6 }}>Live workspace</Tag>}
               </td>
               <td>{c.supplier}</td>
@@ -126,6 +135,7 @@ export default function ContractsPage({
           ))}
         </tbody>
       </table>
+      </div>
 
       {filtered.length === 0 && (
         <p style={{ textAlign: "center", opacity: 0.55, padding: "var(--space-8) 0", fontSize: 14 }}>
