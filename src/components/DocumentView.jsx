@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
-import { MessageSquare, Check, X, CornerDownRight, Pencil, Trash2, Scissors, Link2Off } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { MessageSquare, Check, X, CornerDownRight, Pencil, Trash2, Scissors, Link2Off, AlertTriangle } from "lucide-react";
 import { Tag, Btn, GRAY, AMBER, GREEN, RED } from "../lib/ui.jsx";
 import { runsToText } from "../lib/redline.js";
+import { danglingReferences } from "../lib/crossref.js";
 import { CLAUSE_DRAG_TYPE } from "./ClausePalette.jsx";
 
 function RunSpan({ run, decision }) {
@@ -122,6 +123,9 @@ export default function DocumentView({
   fill = false,        // stretch to the parent instead of taking a fixed height
 }) {
   const mayComment = canComment == null ? canAct : canComment;
+  // Checked where the reference is read, so it is there for whoever is looking and
+  // whoever struck the clause out, including when their marked-up file was imported.
+  const dangling = useMemo(() => danglingReferences(doc, decisions), [doc, decisions]);
   const [commentOn, setCommentOn] = useState(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [editOn, setEditOn] = useState(null);
@@ -367,6 +371,19 @@ export default function DocumentView({
                       ><Pencil size={11} /></button>
                     )}
                   </p>
+                )}
+
+                {dangling.get(block.ref)?.length > 0 && (
+                  <div className="clm-dangling">
+                    <AlertTriangle size={13} />
+                    <span>
+                      This clause points at{" "}
+                      <strong>clause {dangling.get(block.ref).join(", ")}</strong>,{" "}
+                      {dangling.get(block.ref).length === 1 ? "which is" : "which are"} struck out. Accept that
+                      deletion and this reference resolves to nothing, so the limit it relies on stops existing
+                      while the sentence relying on it stays in the contract.
+                    </span>
+                  </div>
                 )}
 
                 {changeIds.map((id) => {

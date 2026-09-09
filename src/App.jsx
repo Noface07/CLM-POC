@@ -20,7 +20,7 @@ import {
 import {
   applyRedline, resolveChanges, deriveFindings, pendingChangeCount,
   applySupplierRevision, applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
-  unsentChangesBy, deleteClauseBlock, handToCounterparty,
+  unsentChangesBy, deleteClauseBlock, handToCounterparty, returnToClient,
   SUPPLIER_REDLINE_EDITS, SUPPLIER_REVISION_EDITS,
 } from "./lib/redline.js";
 import { buildReferenceGraph, contextFor, silentlyAffected, citationsOf } from "./lib/crossref.js";
@@ -580,8 +580,17 @@ export default function CLMApp() {
       const last = history[history.length - 1];
       if (last && docToPlainText(last.doc) === docToPlainText(doc)) return history;
       const key = doc.meta?.version || `v1.${history.length}`;
-      // Two snapshots can share a version: the draft as created and the draft as sent are
-      // the same document. The later label wins the slot rather than duplicating it.
+      // Two snapshots can share a version when the document has not moved between them:
+      // the draft as created and the draft as sent. There the later label wins the slot.
+      //
+      // Two snapshots sharing a version with DIFFERENT text is a different thing: it means
+      // something handed the document over without moving the version, and replacing the
+      // earlier one there loses a real exchange. Keep both and let the key say so, rather
+      // than dropping history to protect a numbering rule.
+      const clash = history.find((h) => h.key === key);
+      if (clash && docToPlainText(clash.doc) !== docToPlainText(doc)) {
+        return [...history, { key: `${key}+`, label, at: stampNow(), doc }];
+      }
       return [...history.filter((h) => h.key !== key), { key, label, at: stampNow(), doc }];
     });
   }
@@ -849,11 +858,15 @@ export default function CLMApp() {
   }
 
   function sendSupplierRedline() {
-    const doc = supplierDraft;
-    if (!doc || !doc.changes.length) {
+    const marked = supplierDraft;
+    if (!marked || !marked.changes.length) {
       flash("Nothing to send yet: mark the document up first.");
       return;
     }
+    // The hand-over, not the markup, is what moves the version. Without this a supplier
+    // who edited clause by clause returned a document still stamped with the version we
+    // sent them, and the version history had nothing to keep it apart from the draft.
+    const doc = returnToClient(marked);
     supersedeEnvelope("the counterparty returned a further redline, so the signed text was superseded");
     setRedlineDoc(doc);
     setSupplierDraft(null);
@@ -1863,6 +1876,7 @@ export default function CLMApp() {
 
             {page === "supplier" && (
               <SupplierPortal
+                citationsFor={citationsFor}
                 supplier={SUPPLIER}
                 contractId={draftRecord?.id || CONTRACT_ID}
                 contractExists={contractExists}

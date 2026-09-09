@@ -7,7 +7,7 @@ playbook, sign it, and track the obligations that fall out of the signed PDF.
 ```bash
 npm install
 npm run dev           # http://localhost:5173
-npm run selftest      # 443 checks over the engines below
+npm run selftest      # 458 checks over the engines below
 npm run export:docx   # write the catalogue out as Word documents
 npm run lint
 ```
@@ -80,6 +80,16 @@ the half a paragraph-at-a-time review cannot have. Clauses whose meaning moved w
 changing are called out at the top of the AI panel, named in the finding that caused them, and
 included in the model's prompt context.
 
+**A clause on its way out takes its references with it.** Striking out 7.2 leaves 7.4
+saying the indemnity is not subject to a limit that will no longer exist. There is a
+warning on the Delete button, but a pre-flight dialog fires once, for the person clicking
+it, on the one path that goes through that button: not when the counterparty strikes the
+clause out in their own copy, not when their marked-up file is imported, and not after
+it has been dismissed. So `danglingReferences` checks the reference **where it is read**,
+and every clause left pointing at a struck-out one says so in the document itself. It is
+computed against the document as it stands, so rejecting the deletion clears the warning
+without anything having to remember it was shown.
+
 ### Comments
 
 The counterparty's comment on a clause appears inside the finding for that clause, because the band
@@ -147,6 +157,19 @@ A version that moves only on their turn is not a version of the document, it is 
 of their turns. Alongside it ran a second numbering keyed on array position and a third
 written by hand, so the same negotiation was simultaneously v1.2, v1.4 and something
 else again in the history panel.
+
+**Marking a working copy up is not a hand-over**, so it does not move the version on its
+own; returning it does. Both routes the supplier has to mark the document up therefore
+reach the same version. When the bump lived in the scripted-markup path instead, a
+supplier who edited clause by clause returned a document still stamped with the version
+we sent them, and the version history had nothing to tell the redline apart from the
+draft it came from.
+
+**The draft stops being editable once a redline exists.** It is still readable and still
+downloadable, because it is the record of what went out, but it is not the document being
+negotiated. It stayed open to edits, and an edit made while looking at it landed on the
+redline, because that is where edits go once one exists: you were editing a document you
+could not see.
 
 Which document is on screen is now a separate vocabulary — `draft`, `redline`,
 `executed`, `amended` — because view slots and version numbers sharing a namespace is how
@@ -389,7 +412,7 @@ src/data/             imports the catalogue; template assembly; the contract por
 src/lib/              zip, unzip, xml, docx, docx-import, pdf, redline, crossref,
                       playbook, rbac, documenso, ai, audit, session, counter
 src/components/       the four tabs, the draft studio, the document viewer, the charts
-scripts/selftest.js   443 checks over all of the above
+scripts/selftest.js   458 checks over all of the above
 scripts/export-catalogue.js   writes catalogue/docx/
 ```
 

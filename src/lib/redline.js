@@ -132,7 +132,12 @@ export function applyRedline(doc, edits, who) {
 
   return {
     ...doc,
-    meta: { ...doc.meta, version: bumpVersion(doc.meta?.version), status: "Redline received" },
+    // Marking up a working copy is not a hand-over, so it does not move the version.
+    // handToCounterparty does that, once, when the document actually goes back. Bumping
+    // here as well made the version depend on *how* the other side marked the document
+    // up: scripted markup bumped, editing clause by clause did not, and two routes to
+    // the same exchange produced different version numbers.
+    meta: { ...doc.meta, status: "Redline received" },
     blocks,
     changes,
     comments,
@@ -427,6 +432,14 @@ export function handToCounterparty(doc, author, status = "Counter-proposal sent"
     ...markChangesSent(doc, author),
     meta: { ...doc.meta, version: bumpVersion(doc.meta?.version), status },
   };
+}
+
+// The supplier returning their markup is the same exchange in the other direction: their
+// changes are theirs and stay unsent-by-us, but the document has moved and the version
+// moves with it.
+export function returnToClient(doc, status = "Redline received") {
+  if (!doc) return doc;
+  return { ...doc, meta: { ...doc.meta, version: bumpVersion(doc.meta?.version), status } };
 }
 
 // Whose markup is sitting on this clause, if anybody's.
