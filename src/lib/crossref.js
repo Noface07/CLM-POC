@@ -123,3 +123,51 @@ export function contextBlock(graph, ref, { maxClauses = 6, maxChars = 700 } = {}
   }
   return lines.join("\n");
 }
+
+/**
+ * Clauses left pointing at a clause that is being struck out.
+ *
+ * The pre-flight warning on the Delete button is a single moment: it fires once, for the
+ * person doing the deleting, and only on the path that goes through that button. It is
+ * not there when the counterparty strikes the clause out in their own copy, it is not
+ * there when their marked-up file is imported, and it is gone the instant it is
+ * dismissed. What is left is clause 7.4 reading "not subject to the limit in clause 7.2"
+ * next to a 7.2 with a line through it, and nothing saying those two facts are connected.
+ *
+ * So the reference is checked where it is read, not only where it is broken. This is
+ * computed against the document as it stands, so rejecting the deletion clears it without
+ * anything having to remember it was ever shown.
+ *
+ * @param {object} doc
+ * @param {object} decisions  changeId -> "accepted" | "rejected" | "pending"
+ * @returns {Map<string, string[]>} citing clause -> the struck-out clauses it points at
+ */
+export function danglingReferences(doc, decisions = {}) {
+  if (!doc) return new Map();
+  const graph = buildReferenceGraph(doc);
+
+  const struck = new Set();
+  for (const block of doc.blocks || []) {
+    if (!block.ref || !block.deletedBy) continue;
+    if (decisions[block.deletedBy] === "rejected") continue;   // put back, nothing is broken
+    struck.add(block.ref);
+  }
+  if (!struck.size) return new Map();
+
+  const out = new Map();
+  for (const [ref, targets] of graph.outbound) {
+    if (struck.has(ref)) continue;            // a clause on its way out takes its pointers with it
+    const broken = [...targets].filter((t) => struck.has(t));
+    if (broken.length) out.set(ref, broken.sort(compareRefs));
+  }
+  return out;
+}
+
+function compareRefs(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}

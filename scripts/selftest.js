@@ -5,7 +5,7 @@ import {
   applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
   markChangesSent, unsentChangesBy, deleteClauseBlock,
   runsToText, runsToOriginalText, compareRefs, positionForRef, SUPPLIER_REDLINE_EDITS,
-  handToCounterparty, bumpVersion, applySupplierRevision,
+  handToCounterparty, returnToClient, bumpVersion, applySupplierRevision,
 } from "../src/lib/redline.js";
 import {
   counterApprovalRows, counterReady, canApproveCounter, outstandingCounters,
@@ -22,7 +22,7 @@ import { PORTFOLIO } from "../src/data/contracts.js";
 import { importDocx } from "../src/lib/docx-import.js";
 import { readZip } from "../src/lib/unzip.js";
 import { parseXml, findAll, textOf, attr } from "../src/lib/xml.js";
-import { buildReferenceGraph, contextFor, silentlyAffected, contextBlock, citationsOf } from "../src/lib/crossref.js";
+import { buildReferenceGraph, contextFor, silentlyAffected, contextBlock, citationsOf, danglingReferences } from "../src/lib/crossref.js";
 import { compareDocs, compareSummary } from "../src/lib/compare.js";
 import {
   cycleOf, addCycle, suggestedFirstDue, monitorState, recordPerformance,
@@ -1130,8 +1130,25 @@ async function main() {
 
   check("a draft starts at v1.0", vDraft.meta.version === "v1.0");
 
-  const vR1 = applyRedline(vDraft, [{ clauseRef: "5.1", proposed: vPay(vDraft).replace("within 12 days", "within 6 days") }], vThem);
+  // Marking a working copy up is not a hand-over. Both routes the supplier has to mark
+  // the document up have to reach the same version, or the number records how they
+  // edited rather than that they replied.
+  const vMarked = applyRedline(vDraft, [{ clauseRef: "5.1", proposed: vPay(vDraft).replace("within 12 days", "within 6 days") }], vThem);
+  check("scripted markup on their working copy does not move the version",
+    vMarked.meta.version === "v1.0");
+  const vHandMarked = applyClauseEdit(vDraft, "5.1", vPay(vDraft).replace("within 12 days", "within 6 days"), vThem);
+  check("nor does marking it up clause by clause", vHandMarked.meta.version === "v1.0");
+  check("so both routes to the same exchange agree",
+    vMarked.meta.version === vHandMarked.meta.version,
+    "one route bumping and the other not is how a redline came back stamped as the draft");
+
+  const vR1 = returnToClient(vMarked);
   check("their redline comes back a version up", vR1.meta.version === "v1.1");
+  check("and says what it now is", vR1.meta.status === "Redline received");
+  check("returning a hand-marked redline reaches the same version",
+    returnToClient(vHandMarked).meta.version === "v1.1");
+  check("their changes are not marked as ours on the way back",
+    vR1.changes.every((c) => !c.sent));
 
   const vEdited = applyClauseEdit(vR1, "5.1", vPay(vR1).replace("within 6 days", "within 9 days"), vUs);
   check("editing in place does not move the version on its own", vEdited.meta.version === "v1.1",
@@ -1226,6 +1243,44 @@ async function main() {
     atStandard[0].assessment?.verdict);
   check("so a document carrying only that is ready to send", counterReady(atStandard));
   check("no counters at all is trivially ready", counterReady(counterApprovalRows([], {})));
+
+
+  // ---- A clause left pointing at one that is being struck out ----
+  //
+  // The pre-flight warning fires once, for the person clicking Delete, on the one path
+  // that goes through that button. It is not there when the counterparty strikes the
+  // clause out in their own copy, and it is gone the moment it is dismissed. What is left
+  // is 7.4 reading "not subject to the limit in clause 7.2" beside a struck-out 7.2.
+  const dangleBase = buildDraft("hard_fm_global", {
+    contract_number: "CTR-D", supplier_name: "Meridian", client_name: "Client",
+    start_date: "2026-10-01", end_date: "2029-09-30", contract_value: "500000",
+    currency_code: "GBP", payment_terms_days: "60",
+  }, { version: "v1.0", status: "Draft" });
+
+  check("an untouched document has nothing dangling", danglingReferences(dangleBase, {}).size === 0);
+
+  const struck72 = deleteClauseBlock(dangleBase, "7.2", { author: "Meridian CTS", role: "Supplier", date: "10 Sep" });
+  const dangles = danglingReferences(struck72, {});
+  check("striking out 7.2 leaves the clauses that cite it dangling", dangles.size > 0,
+    [...dangles.keys()].join(", "));
+  check("7.4 is named, because it says the indemnity is not subject to 7.2's limit",
+    dangles.get("7.4")?.includes("7.2"), JSON.stringify([...dangles]));
+  check("and it is found by the counterparty's deletion, not only by our own",
+    struck72.blocks.find((b) => b.ref === "7.2").runs.every((r) => r.author === "Meridian CTS"));
+  check("the struck clause is not listed as dangling against itself", !dangles.has("7.2"));
+  check("a clause that cites nothing struck out is not listed", !dangles.has("5.1"));
+
+  // Decision-aware, so nothing has to remember the warning was shown.
+  const deleteId = struck72.blocks.find((b) => b.ref === "7.2").deletedBy;
+  check("rejecting the deletion clears the warning",
+    danglingReferences(struck72, { [deleteId]: "rejected" }).size === 0,
+    "the clause is back, so nothing points at a hole");
+  check("accepting it keeps the warning while the reference is still in the text",
+    danglingReferences(struck72, { [deleteId]: "accepted" }).get("7.4")?.includes("7.2"));
+
+  // The same fact the panel reaches by a different route, which is why both exist.
+  check("the finding for the deletion also names what it moves",
+    /7\.4/.test(deriveFindings(struck72, buildReferenceGraph(dangleBase)).find((f) => f.clauseRef === "7.2")?.impact || ""));
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) {

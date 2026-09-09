@@ -54,6 +54,16 @@ export default function WorkspacePage({
 }) {
   const pendingChanges = activeDoc ? pendingChangeCount(activeDoc, changeDecisions) : 0;
   const frozen = docVersion === "executed" || docVersion === "amended";
+  // The draft stops being the live document the moment a redline comes back. It stayed
+  // editable, and worse, an edit made while looking at it landed on the redline instead,
+  // because that is the document edits target. You were editing something you could not
+  // see. It is now readable, downloadable and closed to edits, and says which document
+  // to make the change on.
+  const superseded = docVersion === "draft" && redlineReceived;
+  const locked = frozen || superseded;
+  const lockNote = frozen ? "signed, no longer editable"
+    : superseded ? "superseded by the redline: make changes there"
+    : "read-only for your role";
   const allReviewersApproved = Object.values(approvals).every((a) => a.status === "approved");
 
   // This panel is inside a contract, so it is that contract's trail. The estate-wide view
@@ -316,7 +326,7 @@ export default function WorkspacePage({
               <FileText size={15} />
               <div className="card-title" style={{ margin: 0 }}>Document</div>
               <Tag c={GRAY} style={{ fontSize: 10 }}>
-                {frozen ? "PDF · signed" : "Word (.docx) · editable"}
+                {frozen ? "PDF · signed" : superseded ? "Word (.docx) · superseded" : "Word (.docx) · editable"}
               </Tag>
             </div>
 
@@ -341,6 +351,17 @@ export default function WorkspacePage({
               )}
             </div>
 
+            {superseded && (
+              <div className="clm-readonly-banner" style={{ marginTop: 0 }}>
+                <FileText size={15} />
+                <span>
+                  This is the draft as it was sent. {supplier.name} has since returned a redline, so this version is
+                  the record of what went out, not the document being negotiated. Switch to the redline to make a
+                  change.
+                </span>
+              </div>
+            )}
+
             {activeDoc?.changes?.length > 0 && (
               <div style={{ marginBottom: 8 }}>
                 <ChangeSummary doc={activeDoc} decisions={changeDecisions} />
@@ -358,8 +379,8 @@ export default function WorkspacePage({
                 onOpenPlaybook={onOpenPlaybook}
                 onInsert={(code) => onInsertClause?.(code)}
                 presentIn={activeDoc}
-                disabled={readOnly || frozen}
-                disabledNote={frozen ? "signed, no longer editable" : "read-only for your role"}
+                disabled={readOnly || locked}
+                disabledNote={lockNote}
               />
             )}
 
@@ -368,8 +389,8 @@ export default function WorkspacePage({
                 doc={activeDoc}
                 watermark={watermark}
                 decisions={changeDecisions}
-                canAct={!readOnly && !frozen}
-                canEdit={!readOnly && !frozen}
+                canAct={!readOnly && !locked}
+                canEdit={!readOnly && !locked}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onAddComment={onAddComment}

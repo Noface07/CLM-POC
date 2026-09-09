@@ -55,6 +55,7 @@ function AccessLink({ link, expiresOn }) {
 }
 
 export default function SupplierPortal({
+  citationsFor,
   supplier, contractId, contractExists, sentToSupplier, draftDoc, redlineDoc,
   redlineReceived, supplierDraft, supplierBaseDoc, onAddScriptedChanges, onSendRedline,
   onSupplierEditClause, onSupplierDeleteClause, onSupplierDiscardChange, onAcceptAsSent, supplierAccepted,
@@ -245,6 +246,7 @@ export default function SupplierPortal({
                 currentAuthor={supplier.name}
                 onEditClause={canMarkUp ? onSupplierEditClause : undefined}
                 onDeleteClause={canMarkUp ? onSupplierDeleteClause : undefined}
+                citationsFor={citationsFor}
                 onDiscardChange={canMarkUp ? onSupplierDiscardChange : undefined}
                 onReply={onReplyToComment}
                 onResolveComment={onResolveComment}
