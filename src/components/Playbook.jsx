@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus.js";
 import { X, Search, AlertTriangle, ArrowLeftRight, ShieldQuestion, BookOpen, Infinity as InfinityIcon } from "lucide-react";
 import { PLAYBOOK, roleLabel } from "../data/catalogue.js";
 import { formatBandValue } from "../lib/playbook.js";
@@ -221,6 +222,7 @@ function ClauseEntry({ clause, highlight }) {
 }
 
 export function PlaybookDrawer({ open, onClose, focusCode }) {
+  const focusRef = useModalFocus(open, onClose);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [activeChoice, setActive] = useState(focusCode || null);
@@ -295,6 +297,7 @@ export function PlaybookDrawer({ open, onClose, focusCode }) {
   return (
     <div className="clm-drawer-backdrop" onClick={onClose}>
       <div
+        ref={focusRef} tabIndex={-1}
         className="clm-drawer" onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label="Clause playbook"
         style={{ display: "flex", flexDirection: "column", padding: 0 }}

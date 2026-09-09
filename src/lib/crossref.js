@@ -67,6 +67,31 @@ export function contextFor(graph, ref) {
   return { ref, outbound, inbound, schedules, total: outbound.length + inbound.length };
 }
 
+// Who would be left pointing at nothing.
+//
+// Striking a clause out does not strike out the sentences that cite it. Delete the
+// liability cap and the indemnity still says it is "not subject to the limit in clause
+// 7.2", which is now a pointer to a clause that is not in the contract. The reference
+// graph cannot warn about it afterwards either: once the target stops being a block the
+// edge disappears, so the broken pointer becomes invisible at exactly the moment it is
+// created. It has to be said before the deletion, not found after it.
+export function citationsOf(graph, ref) {
+  if (!graph || !ref) return [];
+  const sentenceFor = (text) => {
+    const hit = text.split(/(?<=\.)\s+/).find((s) => new RegExp(`\\b(?:clause|section|paragraph)s?\\s+${ref.replace(".", "\\.")}\\b`, "i").test(s));
+    return (hit || text).trim();
+  };
+
+  return [...(graph.inbound.get(ref) || [])].map((source) => {
+    const block = graph.blocks.get(source);
+    return {
+      ref: source,
+      heading: block?.heading || "",
+      sentence: block ? sentenceFor(clauseText(block)) : "",
+    };
+  }).sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
+}
+
 export function silentlyAffected(graph, changedRefs) {
   const changed = new Set(changedRefs);
   const affected = new Map();

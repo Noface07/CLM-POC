@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus.js";
 import { ShieldCheck, RotateCcw, Lock, X } from "lucide-react";
 import { Tag, Btn, GREEN, AMBER, GRAY, kicker } from "../lib/ui.jsx";
 import { DEFAULT_APPROVAL_MATRIX, APPROVER_POOL, ROUTE_DESKS, formatMoney } from "../data/contracts.js";
 
 export default function ApprovalMatrix({ open, onClose, matrix, onChange, role, contractValue }) {
+  const focusRef = useModalFocus(open, onClose);
   const canEdit = role === "System Administrator";
   const [dirty, setDirty] = useState(false);
   if (!open) return null;
@@ -15,7 +17,10 @@ export default function ApprovalMatrix({ open, onClose, matrix, onChange, role, 
 
   return (
     <div className="clm-drawer-backdrop" onClick={onClose}>
-      <div className="clm-drawer" style={{ overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={focusRef} tabIndex={-1} className="clm-drawer" style={{ overflowY: "auto" }}
+        onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Approval matrix"
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: "var(--space-2)", flexWrap: "wrap" }}>
           <ShieldCheck size={18} />
           <h2 style={{ margin: 0 }}>Approval matrix</h2>

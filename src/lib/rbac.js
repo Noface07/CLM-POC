@@ -133,7 +133,21 @@ export function canReadPlaybook() {
   return true;
 }
 
+// The audit trail.
+//
+// Reading it is a separate permission from doing anything on a contract, and it belongs
+// to the role that can do nothing else: an auditor who can also act is not auditing. The
+// demo-control role has it because the demo has to be driveable from one seat.
+//
+// Everyone else sees a contract's own events in its workspace. The estate-wide trail is
+// not withheld to hide it; it is simply not the question anyone else is asking, and a
+// page that answers a question nobody asked is where real findings go to be missed.
+export function canReadAudit(role) {
+  return role === ALL_ACCESS || role === "Auditor (read-only)";
+}
+
 export function visiblePages(role) {
   if (role === "System Administrator") return ["dashboard", "admin"];
-  return ["dashboard", "contracts", "workspace", "obligations"];
+  const pages = ["dashboard", "contracts", "workspace", "obligations"];
+  return canReadAudit(role) ? [...pages, "audit"] : pages;
 }

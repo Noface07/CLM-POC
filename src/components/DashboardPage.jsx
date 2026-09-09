@@ -3,7 +3,10 @@ import {
   AlertTriangle, CalendarClock, FileSignature, ArrowLeftRight, PencilLine, BellOff, Check, Minus,
 } from "lucide-react";
 import { Tag, Btn, GREEN, AMBER, RED, GRAY, statusColor } from "../lib/ui.jsx";
-import { HBarChart, DonutChart, StatusStackBar, ColumnChart, ChartFrame, StatTile, BAND_FILL, STATUS_FILL } from "./charts.jsx";
+import {
+  HBarChart, DonutChart, StatusStackBar, ColumnChart, ChartFrame, StatTile,
+  ObligationHealthBars, OBLIGATION_STATES, BAND_FILL, STATUS_FILL,
+} from "./charts.jsx";
 import { LIFECYCLE_STAGES, stageForStatus } from "./LifecycleBar.jsx";
 import { formatMoney } from "../data/contracts.js";
 import { contractVisibility } from "../lib/rbac.js";
@@ -70,7 +73,7 @@ function buildRunway(contracts, now) {
 }
 
 export default function DashboardPage({
-  role, contracts, allContracts, exceptions, assessFor, obligations, validatedCount,
+  role, contracts, allContracts, exceptions, assessFor, obligations, validatedCount, liveObligationCounts,
   onOpenPlaybook, onGoToContracts, onGoToWorkspace,
 }) {
   const now = new Date();
@@ -94,6 +97,22 @@ export default function DashboardPage({
 
   const runway = buildRunway(contracts, now);
   const evergreen = contracts.filter((c) => c.evergreen);
+
+  // Obligations exist only once a contract is executed, so a contract still in drafting
+  // or negotiation has an empty register rather than a zeroed one. The live contract's
+  // numbers come from the monitor itself; the rest of the estate carries its own.
+  const withRegister = contracts.filter((c) => c.obligations || (c.live && liveObligationCounts));
+  const notInForce = contracts.length - withRegister.length;
+  const obligationRows = withRegister
+    .map((c) => ({
+      id: c.id,
+      supplier: c.supplier,
+      counts: (c.live && liveObligationCounts) ? liveObligationCounts : c.obligations,
+    }))
+    .filter((r) => OBLIGATION_STATES.some((s) => (r.counts?.[s.key] || 0) > 0))
+    .sort((a, b) => (b.counts.overdue - a.counts.overdue)
+      || (b.counts.due - a.counts.due)
+      || (b.counts.onTrack + b.counts.watch) - (a.counts.onTrack + a.counts.watch));
 
   const byCategory = Object.entries(
     contracts.reduce((acc, c) => {
@@ -195,7 +214,19 @@ export default function DashboardPage({
         </ChartFrame>
       </div>
 
-      <div className="clm-grid-2" style={{ marginBottom: "var(--space-4)" }}>
+      <ChartFrame
+        title="Obligation health by contract"
+        note={obligationRows.length
+          ? `What each live contract owes, and how much of it has slipped. Ordered by what has gone wrong. ${notInForce} contract${notInForce === 1 ? " is" : "s are"} not in force yet, so ${notInForce === 1 ? "it carries" : "they carry"} no obligations: they are extracted from an executed document.`
+          : "No contract in the estate is executed yet, so there is nothing to monitor."}
+      >
+        <ObligationHealthBars
+          rows={obligationRows}
+          emptyNote="No executed contracts, so no obligations to monitor."
+        />
+      </ChartFrame>
+
+      <div className="clm-grid-2" style={{ marginBottom: "var(--space-4)", marginTop: "var(--space-4)" }}>
         <ChartFrame
           title="Renewal runway"
           note={`Fixed-term contracts by the quarter they expire in, next ${QUARTERS_AHEAD} quarters. Evergreen contracts are counted separately below: they have no expiry to plot.`}

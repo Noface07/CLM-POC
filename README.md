@@ -7,7 +7,7 @@ playbook, sign it, and track the obligations that fall out of the signed PDF.
 ```bash
 npm install
 npm run dev           # http://localhost:5173
-npm run selftest      # 219 checks over the engines below
+npm run selftest      # 443 checks over the engines below
 npm run export:docx   # write the catalogue out as Word documents
 npm run lint
 ```
@@ -96,9 +96,86 @@ clauses that read with this one, the counterparty's comment thread, and the four
 There used to be an inline expansion *and* a dialog showing overlapping-but-different subsets of the
 same finding, so a reviewer could decide on whichever half was in front of them. There is now one.
 
+### Countering a proposal, and what it is measured against
+
+They struck the wording we drafted and proposed their own; we answer with a third
+position. Two different things wear the same Edit button, and they are not the same move.
+
+**Revising our own unsent markup** is one open proposal being rewritten. It is diffed from
+the clause's original wording and replaces itself, because a trail through positions we
+never put to anybody is not a negotiation record.
+
+**Countering theirs** is a rejection of their number and an answer to it. Recording it as a
+move from the wording we drafted states two falsehoods: that we moved off our own position
+unprompted, and that they never asked for theirs. The second matters most, because their
+proposal and the reason they gave for it are the record.
+
+So a counter keeps their markup and layers ours on top, the way Word does when you edit
+someone else's tracked change. We draft 12 days, they propose 6, we answer 9, and the
+clause reads `within ~~12~~ ~~6~~ 9 days`: what we drafted, what they asked for, what we
+answered. The strike on their 6 carries **both** attributions, so the document says
+"proposed by them, struck by us" rather than crediting us with deleting wording that was
+never in the contract; `src/lib/docx.js` writes that as OOXML's nested `w:ins`/`w:del`,
+which is how Word keeps both names.
+
+`previous` on our change is **their** text, because that is the position we answered, and
+`base` carries the wording originally agreed. The distinction is not cosmetic: `previous`
+is what the playbook band, the impact sentence and the audit line are all computed from,
+and measuring a counter from the wrong end reads the negotiation backwards.
+
+Their proposal stays on the record marked **superseded**, decided by our counter rather
+than separately: one clause, one open decision. Accept our counter and their wording goes
+with it; reject it and their proposal is back on the table exactly as it was, which is
+only possible because it was never removed from the document.
+
 **The redline keeps its markup.** Deciding a change restyles it: an accepted insertion goes plain, a
 rejected one disappears, but the tracked changes stay on the v1.x tab as the negotiation record. The
 clean copy is the executed version, and nowhere else.
+
+### The version moves when the document changes hands
+
+Every exchange is a version, in both directions. We draft v1.0 and send it; their markup
+comes back as v1.1; our counter goes out as v1.2; their revision returns as v1.3. Five
+exchanges, five versions, and the number on the page is the number in the compare picker
+and the number in the version history, because they are all read from `meta.version`
+rather than kept separately.
+
+It did not use to be. The version advanced only when the **counterparty** acted, so a
+counter-proposal went back to them carrying the number they had given us: two materially
+different contracts under one version, one of them a `.docx` that had left the building.
+A version that moves only on their turn is not a version of the document, it is a count
+of their turns. Alongside it ran a second numbering keyed on array position and a third
+written by hand, so the same negotiation was simultaneously v1.2, v1.4 and something
+else again in the history panel.
+
+Which document is on screen is now a separate vocabulary — `draft`, `redline`,
+`executed`, `amended` — because view slots and version numbers sharing a namespace is how
+"v1.1" came to mean "the redline tab" on a document stamped v1.3.
+
+### Nothing we have not approved reaches them
+
+Deciding the supplier's tracked changes is routed: each is placed in its band and sent to
+the role that may approve that position. **Authoring our own wording on their redline was
+governed by nothing** — it went back over a button gated on `!readOnly`, so our position
+reached the counterparty having been read by exactly one person: whoever typed it. That is
+the same failure the internal-review reset exists to prevent, one round later.
+
+Resetting the whole internal review would be the wrong answer: it clears approvals on
+eighteen clauses because one moved. `src/lib/counter.js` gives the proportionate one. Our
+counter is placed in the band exactly as theirs would be, and the role the playbook names
+has to approve that position before **Send back** is enabled. A counter at or better than
+our own standard position needs nobody, because there is no exception to approve and
+requiring a signature to propose our own wording is how approval steps become things
+people click through without reading.
+
+The approvals are cleared once the round is sent: they were approvals of those changes,
+and the next round's counters are approved on their own merits.
+
+**Findings say when they are out of date.** They are derived from the tracked changes, so
+editing the redline dates them, and a clause you have just written carries no band until
+they are re-derived. The panel says so and offers the button rather than re-running by
+itself, because with live AI on, re-deriving is a real API call and spending one per
+keystroke is not the demo's decision to make.
 
 **Requesting a revision produces a new version.** It is not a flag on a change: the counterparty
 returns fresh markup, the document moves to v1.2, and the finding is re-derived against what they
@@ -256,6 +333,53 @@ done: transition assistance delivered, asset and compliance data handed back, ac
 invoice settled, surviving obligations re-homed. Marking a contract terminated the day notice is
 served is how a client ends up with no asset data and a supplier whose badges still work.
 
+
+## The audit trail
+
+`src/lib/audit.js`. Every approval, tracked-change decision, exception decision, signature and
+lifecycle event is appended as an entry carrying **who acted, what they acted on, and the instant
+they did it**: an ISO timestamp, the acting role, the person behind that role where the contract
+data names one, and the contract id. The instant is stored and the display string is rendered from
+it, because a rendered time does not sort and reads differently in a different locale.
+
+Where no person is named for a role, the entry says the role rather than inventing somebody. An
+action taken under **All Access (Demo Control)** is flagged as such on its own row and counted at
+the top of the page: that role is not a product role, and an action attributable to nobody should
+say so rather than be presented as someone's.
+
+**Which contract an entry belongs to is the point, not a column.** A contract's workspace shows that
+contract's events and says how many estate-level ones it is therefore not showing. Almost every
+action is taken on the contract open in the workspace, so that is the default id, but it is a
+default and not a rule: quick-adding a contract files against the contract it creates, not against
+whatever happened to be open. A handful of actions genuinely precede any contract, opening
+initiation from Salesforce among them, and those are labelled **Estate-level** rather than shown
+with a blank cell, because "belongs to no contract" and "we failed to record it" are different
+facts.
+
+The **Auditor (read-only)** role gets the estate-wide trail as its own page, filterable by acting
+role and by contract, searchable, and exportable as RFC 4180 CSV. The filters appear only when
+there is something to choose between: in a single-contract session a one-option dropdown is not a
+filter, it is a label that looks like a control. Reading the trail is a permission of its own
+(`canReadAudit`), held by the role that can do nothing else, because an auditor who can also act is
+not auditing.
+
+## Sessions, and what happens when something breaks
+
+The session is written to `localStorage` so a reload does not lose a negotiation halfway through,
+and that carries a hazard worth naming: a snapshot is a serialised copy of one build's state
+shapes. Restore a stale one into a renderer that has moved on and it throws during render, on a
+page whose state came out of storage, so the reload the user reaches for first reproduces it.
+
+`src/lib/session.js` stamps every snapshot with the schema it was written under and **discards any
+snapshot written under a different one**, rather than guessing what an old shape meant. The cost is
+a demo session that can be replayed in a minute.
+
+`src/components/ErrorBoundary.jsx` is the other half: if a render throws anyway, the fallback is not
+an apology, it is the reset control, on a page that still renders, saying what it is about to throw
+away. Reset itself now clears the snapshot and reloads instead of calling a setter for each of the
+sixty-odd pieces of state, because that setter list was a hand-maintained second copy of the initial
+state and it drifted the way second copies do.
+
 ## Layout
 
 ```
@@ -263,9 +387,9 @@ catalogue/            agreement types, templates, clause playbook: the source of
 catalogue/docx/       the same, as Word documents (generated, see npm run export:docx)
 src/data/             imports the catalogue; template assembly; the contract portfolio
 src/lib/              zip, unzip, xml, docx, docx-import, pdf, redline, crossref,
-                      playbook, rbac, documenso, ai
+                      playbook, rbac, documenso, ai, audit, session, counter
 src/components/       the four tabs, the draft studio, the document viewer, the charts
-scripts/selftest.js   219 checks over all of the above
+scripts/selftest.js   443 checks over all of the above
 scripts/export-catalogue.js   writes catalogue/docx/
 ```
 

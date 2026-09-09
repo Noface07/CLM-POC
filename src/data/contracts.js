@@ -63,12 +63,14 @@ export const PORTFOLIO = [
     status: "Active", value: 2100000, currency: "GBP", startDate: "2025-02-01", endDate: "2028-01-31",
     category: "Technical Maintenance", routedTo: ["legal", "contract_management"],
     owner: "D. Whitfield", requestedBy: "R. Ashworth",
+    obligations: { overdue: 0, due: 2, onTrack: 9, watch: 4 },
   }),
   contract({
     id: "CLM-2011", supplier: "Ferrow Pest Control", agreementTypeCode: "reactive",
     status: "Active", value: 76000, currency: "GBP", startDate: "2025-10-16", endDate: "2026-10-15",
     category: "Other", routedTo: ["contract_management"],
     owner: "D. Whitfield", requestedBy: "R. Ashworth",
+    obligations: { overdue: 1, due: 0, onTrack: 3, watch: 2 },
   }),
   contract({
     id: "CLM-2038", supplier: "Bright Path Logistics", agreementTypeCode: "equipment_supply",
@@ -93,6 +95,7 @@ export const PORTFOLIO = [
     status: "Active", value: 289000, currency: "GBP", startDate: "2024-07-01",
     evergreen: true, category: "Cleaning", routedTo: ["contract_management"],
     owner: "D. Whitfield", requestedBy: "R. Ashworth",
+    obligations: { overdue: 3, due: 2, onTrack: 5, watch: 3 },
     evergreenNote: "Rolling term, 90-day mutual termination for convenience. Reviewed annually against CPI.",
   }),
   contract({
@@ -100,6 +103,7 @@ export const PORTFOLIO = [
     status: "Active", value: 0, currency: "GBP", startDate: "2025-05-12",
     evergreen: true, category: "Access Control", routedTo: ["legal"],
     owner: "R. Sandhu", requestedBy: "M. Duarte",
+    obligations: { overdue: 0, due: 1, onTrack: 11, watch: 5 },
     evergreenNote: "Term matches the parent MSA. A DPA with its own expiry would lapse while processing continues.",
   }),
   contract({
@@ -113,18 +117,21 @@ export const PORTFOLIO = [
     status: "Expiring", value: 94000, currency: "GBP", startDate: "2024-12-01", endDate: "2026-11-30",
     category: "Grounds", routedTo: ["contract_management"],
     owner: "D. Whitfield", requestedBy: "R. Ashworth",
+    obligations: { overdue: 2, due: 3, onTrack: 2, watch: 1 },
   }),
   contract({
     id: "CLM-2090", supplier: "Kestrel Fire & Safety", agreementTypeCode: "hard_fm",
     status: "Active", value: 431000, currency: "GBP", startDate: "2025-01-15", endDate: "2026-12-14",
     category: "Life Safety", routedTo: ["contract_management"],
     owner: "D. Whitfield", requestedBy: "R. Ashworth",
+    obligations: { overdue: 0, due: 0, onTrack: 8, watch: 6 },
   }),
   contract({
     id: "CLM-2096", supplier: "Ashvale Catering Group", agreementTypeCode: "nda",
     status: "Executed", value: 0, currency: "GBP", startDate: "2026-06-01", endDate: "2028-05-31",
     category: "Catering", routedTo: ["legal"],
     owner: "R. Sandhu", requestedBy: "M. Duarte",
+    obligations: { overdue: 0, due: 1, onTrack: 4, watch: 2 },
   }),
 ];
 

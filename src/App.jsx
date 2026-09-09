@@ -15,24 +15,33 @@ import { SALESFORCE_DEFAULTS, pushMilestone } from "./lib/salesforce.js";
 import {
   ROLES, ROLE_DESCRIPTIONS, ALL_ACCESS_ROLE, contractVisibility, visibleContracts, isReadOnly,
   roleCanActOnReviewer, roleCanActOnException, canManageLifecycle as canManageLifecycleFor,
-  canCreateContract, canDraft as canDraftFor, canSign as canSignFor,
+  canCreateContract, canDraft as canDraftFor, canSign as canSignFor, canReadAudit,
 } from "./lib/rbac.js";
 import {
   applyRedline, resolveChanges, deriveFindings, pendingChangeCount,
   applySupplierRevision, applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
-  markChangesSent, unsentChangesBy, deleteClauseBlock,
+  unsentChangesBy, deleteClauseBlock, handToCounterparty,
   SUPPLIER_REDLINE_EDITS, SUPPLIER_REVISION_EDITS,
 } from "./lib/redline.js";
-import { buildReferenceGraph, contextFor, silentlyAffected } from "./lib/crossref.js";
+import { buildReferenceGraph, contextFor, silentlyAffected, citationsOf } from "./lib/crossref.js";
 import { importDocx } from "./lib/docx-import.js";
 import { assessFinding } from "./lib/playbook.js";
+import {
+  counterApprovalRows, counterReady, canApproveCounter, counterBlockedReason,
+} from "./lib/counter.js";
 import { partitionObligations } from "./lib/obligations.js";
+import {
+  suggestedFirstDue, recordPerformance, monitorSummary, toIso, sweep, applyLapse, amendmentImpact,
+} from "./lib/monitoring.js";
 import { buildPdf, downloadPdf, extractPdfTextFromBlob, extractPdfText } from "./lib/pdf.js";
 import { PROVIDER_DEFAULTS, callLiveAI, buildChangePrompt, buildObligationPrompt, MOCK_OBLIGATIONS } from "./lib/ai.js";
 import {
   DEFAULT_CONFIG as DOCUMENSO_DEFAULTS, sendForSignature, simulateEnvelope, getEnvelope, certificateUrl,
 } from "./lib/documenso.js";
 import { downloadBlob } from "./lib/zip.js";
+import { readSnapshot, writeSnapshot, clearSnapshot } from "./lib/session.js";
+import { makeEntry as makeAuditEntry } from "./lib/audit.js";
+import { useModalFocus } from "./lib/useModalFocus.js";
 import {
   Tag, Btn, Field, statusColor, GREEN, AMBER, RED, GRAY, kicker,
   delay, shortId, stampNow, formatDate,
@@ -51,6 +60,11 @@ import ExceptionDialog from "./components/ExceptionDialog.jsx";
 import ApprovalMatrix from "./components/ApprovalMatrix.jsx";
 import SalesforcePanel from "./components/SalesforcePanel.jsx";
 import PostExecution from "./components/PostExecution.jsx";
+import AuditPage from "./components/AuditPage.jsx";
+
+// Monitoring is measured against a real calendar, so the clock is named once here.
+const TODAY = toIso(new Date());
+const CONTRACT_START = "2026-10-01";
 
 const TABS = [
   ["Dashboard", "dashboard"],
@@ -102,16 +116,9 @@ const MILESTONE_NOTE = {
   Terminated: "Terminated",
 };
 
-const PERSIST_KEY = "clm-demo-session-v1";
-
-const SNAPSHOT = (() => {
-  try {
-    const raw = window.localStorage.getItem(PERSIST_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-})();
+// Read once, at module load, and only if it was written under this build's schema.
+// See src/lib/session.js for why a mismatch is discarded rather than migrated.
+const SNAPSHOT = readSnapshot(window.localStorage);
 
 function restored(key, fallback) {
   return SNAPSHOT && key in SNAPSHOT ? SNAPSHOT[key] : fallback;
@@ -176,7 +183,10 @@ export default function CLMApp() {
   const [docHistory, setDocHistory] = useState(() => restored("docHistory", []));
   const [supplierAccepted, setSupplierAccepted] = useState(() => restored("supplierAccepted", null));
   const [changeDecisions, setChangeDecisions] = useState(() => restored("changeDecisions", {}));
-  const [docVersion, setDocVersion] = useState(() => restored("docVersion", "v1.0"));
+  // Which document is on screen, not what version it is. These used to share a
+  // namespace with the contract's version numbers, which is how "v1.1" came to mean
+  // "the redline slot" on a document stamped v1.3.
+  const [docVersion, setDocVersion] = useState(() => restored("docVersion", "draft"));
 
   const [approvals, setApprovals] = useState(() => restored("approvals", EMPTY_APPROVALS));
   const [reviewInvalidated, setReviewInvalidated] = useState(() => restored("reviewInvalidated", null));
@@ -198,10 +208,15 @@ export default function CLMApp() {
   const [sfContext, setSfContext] = useState(() => restored("sfContext", null));
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [redlineReopened, setRedlineReopened] = useState(() => restored("redlineReopened", false));
+  const [counterApprovals, setCounterApprovals] = useState(() => restored("counterApprovals", {}));
+  // Findings are derived from the tracked changes, so editing the redline dates them.
+  // Re-deriving on every keystroke would spend a live API call per edit, so it says so
+  // and offers the button instead of deciding for the user.
+  const [findingsStale, setFindingsStale] = useState(() => restored("findingsStale", null));
   const [declineReason, setDeclineReason] = useState(() => restored("declineReason", ""));
   const [showManualException, setShowManualException] = useState(false);
   const [manualExceptionDraft, setManualExceptionDraft] = useState({ clause: "", materiality: "Medium", changeType: "Other", impact: "" });
-  const [extraHistory, setExtraHistory] = useState([]);
+  const [extraHistory, setExtraHistory] = useState(() => restored("extraHistory", []));
 
   const [documensoConfig, setDocumensoConfig] = useState(DOCUMENSO_DEFAULTS);
   const [envelope, setEnvelope] = useState(() => restored("envelope", null));
@@ -213,7 +228,9 @@ export default function CLMApp() {
   const [executedPdfBlob, setExecutedPdfBlob] = useState(null);
   const [signatures, setSignatures] = useState(() => restored("signatures", { client: null, supplier: null }));
   const [ceremony, setCeremony] = useState(null);   // "client" | "supplier" | null
-  const [envelopeRecipients, setEnvelopeRecipients] = useState([
+  // Fixed for the life of the session: nothing in the UI edits the recipient list today,
+  // and reset now reloads rather than reassigning it.
+  const [envelopeRecipients] = useState([
     { name: CLIENT_ENTITY.signatory, email: CLIENT_ENTITY.signatoryEmail, role: "SIGNER", party: "client", onBehalfOf: CLIENT_ENTITY.name },
     { name: SUPPLIER.signatoryName, email: SUPPLIER.signatoryEmail, role: "SIGNER", party: "supplier", onBehalfOf: SUPPLIER.name },
   ]);
@@ -237,6 +254,8 @@ export default function CLMApp() {
   const [obligationsLoading, setObligationsLoading] = useState(false);
   const [obligationRunMeta, setObligationRunMeta] = useState(null);
   const [validated, setValidated] = useState(() => restored("validated", {}));
+  const [obligationLog, setObligationLog] = useState(() => restored("obligationLog", {}));
+  const [registerReviewed, setRegisterReviewed] = useState(() => restored("registerReviewed", null));
   const [editingIndex, setEditingIndex] = useState(null);
   const [editDraft, setEditDraft] = useState({});
 
@@ -304,6 +323,11 @@ export default function CLMApp() {
   const negotiated = Boolean(redlineDoc);
   // Our own edits to their redline that have not been put back to them yet.
   const counterChanges = unsentChangesBy(redlineDoc, CLIENT_ENTITY.signatory);
+  // A counter-proposal is a position we are asserting, so it is approved before it is
+  // sent, by whoever the playbook says may approve that position.
+  const counterRows = counterApprovalRows(counterChanges, counterApprovals);
+  const counterCleared = counterReady(counterRows);
+  const counterBlocked = counterBlockedReason(counterRows);
 
   const readyForSignature = contractExists && sentToSupplier && counterChanges.length === 0 && (
     negotiated
@@ -378,12 +402,37 @@ export default function CLMApp() {
 
   const referenceGraph = useMemo(() => (draftDoc ? buildReferenceGraph(draftDoc) : null), [draftDoc]);
 
+  // Built over the live document rather than the original draft: a clause inserted this
+  // round can be cited too, and one already struck out should not be warned about twice.
+  const liveGraph = useMemo(
+    () => ((redlineDoc || draftDoc) ? buildReferenceGraph(redlineDoc || draftDoc) : null),
+    [redlineDoc, draftDoc]
+  );
+  const citationsFor = (ref) => citationsOf(liveGraph, ref);
+
   const silentClauses = useMemo(() => {
     if (!referenceGraph || !redlineDoc) return [];
     return silentlyAffected(referenceGraph, redlineDoc.changes.map((c) => c.clauseRef));
   }, [referenceGraph, redlineDoc]);
 
   const crossRefFor = (ref) => (referenceGraph && ref ? contextFor(referenceGraph, ref) : null);
+
+  // What monitoring actually says right now, as opposed to how many rows were approved.
+  const monitorNow = useMemo(
+    () => monitorSummary(
+      Object.keys(validated).map((i) => obligationLog[i]).filter(Boolean),
+      TODAY
+    ),
+    [validated, obligationLog]
+  );
+
+  // The register was extracted from the contract as it stood before the amendment.
+  const amendmentReview = useMemo(() => {
+    if (amendment?.stage !== "attached") return null;
+    if (registerReviewed === amendment.id) return null;
+    if (!(aiObligations || []).length) return null;
+    return { amendment, ...amendmentImpact(aiObligations, amendment) };
+  }, [amendment, registerReviewed, aiObligations]);
 
   const trackedObligationCount = useMemo(
     () => partitionObligations(aiObligations).tracked.length,
@@ -449,9 +498,9 @@ export default function CLMApp() {
     };
   }, [executedDoc, amendment, draftRecord]);
 
-  const activeDoc = docVersion === "v1.1" ? redlineDoc
+  const activeDoc = docVersion === "redline" ? redlineDoc
     : docVersion === "executed" ? executedDoc
-    : docVersion === "v2.1" ? (amendedDoc || executedDoc)
+    : docVersion === "amended" ? (amendedDoc || executedDoc)
     : draftDoc;
 
   const envelopePdfUrl = useMemo(() => {
@@ -462,37 +511,48 @@ export default function CLMApp() {
   useEffect(() => () => { if (envelopePdfUrl) URL.revokeObjectURL(envelopePdfUrl); }, [envelopePdfUrl]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PERSIST_KEY, JSON.stringify({
-        draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
-        exceptionDecisions, envelope, aiObligations, validated, sentToSupplier,
-        redlineReopened, declineReason, approvalMatrix, sfRecord, sfContext, sfMilestones, amendment,
-        clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
-        closureTasks,
-      }));
-    } catch {
-      // Storage blocked or full. The session will not survive a reload, which is acceptable.
-    }
-  }, [draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
-      exceptionDecisions, envelope, aiObligations, validated, sentToSupplier,
+    writeSnapshot(window.localStorage, {
+      draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
+      exceptionDecisions, envelope, aiObligations, validated, obligationLog, registerReviewed, sentToSupplier,
+      redlineReopened, declineReason, approvalMatrix, sfRecord, sfContext, sfMilestones, amendment,
+      counterApprovals, findingsStale,
       clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
-      closureTasks, amendment]);
+      closureTasks,
+    });
+  // Every value written above is listed here. Anything missing simply never triggers a
+  // save: the approval matrix was edited, nothing else changed, and the edit was gone on
+  // the next reload.
+  }, [draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted,
+      changeDecisions, approvals, reviewInvalidated, aiChange, exceptionDecisions, envelope,
+      aiObligations, validated, obligationLog, registerReviewed, sentToSupplier, redlineReopened, declineReason,
+      approvalMatrix, sfRecord, sfContext, sfMilestones, amendment, counterApprovals, findingsStale,
+      clientSigned, supplierViewed,
+      supplierSigned, docVersion, auditLog, extraContracts, signatures, closureTasks]);
 
   const versions = [
-    { key: "v1.0", label: "v1.0 Draft (Word)" },
-    ...(redlineDoc ? [{ key: "v1.1", label: `${redlineDoc.meta?.version || "v1.1"} Redline (Word)` }] : []),
+    { key: "draft", label: `${draftDoc?.meta?.version || "v1.0"} Draft (Word)` },
+    ...(redlineDoc ? [{ key: "redline", label: `${redlineDoc.meta?.version || "v1.1"} Redline (Word)` }] : []),
     ...(envelopeStatus === "COMPLETED" ? [{ key: "executed", label: "Executed (PDF)" }] : []),
-    ...(amendedDoc ? [{ key: "v2.1", label: "v2.1 As amended (PDF)" }] : []),
+    ...(amendedDoc ? [{ key: "amended", label: "v2.1 As amended (PDF)" }] : []),
   ];
 
   // The parent only moves when a signed amendment attaches to it.
   const parentVersion = amendment?.stage === "attached" ? "v2.1" : "v2.0";
 
+  // Read off the versions actually kept, rather than a second list written by hand.
+  //
+  // The hand-written one asserted v1.1 for the redline and stopped there, so a
+  // negotiation that ran four exchanges displayed as two, and every entry after the
+  // first counter-proposal was a literal that no document carried.
   const versionHistory = [
     { v: "v0.1", label: `Preview generated from ${TEMPLATE_BY_CODE[draftRecord?.templateCode]?.name || "template"}`, format: "watermarked", show: contractExists },
     { v: "v1.0", label: `Draft created by ${CONTRACT_OWNER}`, format: ".docx", show: contractExists },
-    { v: "v1.0", label: `Sent to ${SUPPLIER.name}`, format: ".docx", show: sentToSupplier },
-    { v: "v1.1", label: `Redline received from ${SUPPLIER.name}`, format: ".docx, tracked changes", show: Boolean(redlineDoc) },
+    ...docHistory.map((h) => ({
+      v: h.key,
+      label: h.label,
+      format: (h.doc?.changes || []).length ? ".docx, tracked changes" : ".docx",
+      show: true,
+    })),
     ...extraHistory.map((h) => ({ ...h, show: true })),
     { v: "v2.0", label: "Executed by both parties", format: ".pdf", show: envelopeStatus === "COMPLETED" },
   ].filter((r) => r.show);
@@ -510,17 +570,33 @@ export default function CLMApp() {
   // sides. Those are the points somebody can be asked to compare, and without keeping
   // them there is nothing to compare against, because the working document is rewritten
   // in place each round.
+  // The key is the document's own version, not where it happens to sit in this array.
+  // A positional key counts snapshots, and this function declines to take one when the
+  // text has not moved, so the two drift the first time it declines: the picker then
+  // offers a "v1.3" that no document has ever been stamped with.
   function keepVersion(doc, label) {
     if (!doc) return;
     setDocHistory((history) => {
       const last = history[history.length - 1];
       if (last && docToPlainText(last.doc) === docToPlainText(doc)) return history;
-      return [...history, { key: `v1.${history.length}`, label, at: stampNow(), doc }];
+      const key = doc.meta?.version || `v1.${history.length}`;
+      // Two snapshots can share a version: the draft as created and the draft as sent are
+      // the same document. The later label wins the slot rather than duplicating it.
+      return [...history.filter((h) => h.key !== key), { key, label, at: stampNow(), doc }];
     });
   }
 
   function flash(msg) { setNotice(msg); setTimeout(() => setNotice(""), 3600); }
-  function logAudit(label) { setAuditLog((log) => [...log, { time: stampNow(), label }]); }
+  // Almost every action in this app is taken on the contract open in the workspace, so
+  // that is the default. It is a default and not a rule: quick-adding a contract acts on
+  // the one it creates, and filing that against whatever happened to be open attributes an
+  // action to a contract it was never taken on, which is the one thing a trail must not do.
+  // Pass an id to say otherwise; pass null for the actions that genuinely precede a
+  // contract, such as opening initiation from Salesforce.
+  function logAudit(event, contractId = draftRecord?.id || null) {
+    const entry = makeAuditEntry({ event, role: currentRole, contractId });
+    setAuditLog((log) => [...log, entry]);
+  }
   async function syncToSalesforce(status, milestone) {
     if (!sfRecord || !draftRecord) return;
     try {
@@ -544,47 +620,30 @@ export default function CLMApp() {
   }
   function openPlaybook(focus) { setPlaybook({ open: true, focus: typeof focus === "string" ? focus : null }); }
 
+  // Reset clears the saved session and reloads, rather than calling a setter for each of
+  // the sixty-odd pieces of state.
+  //
+  // The setter list was a second copy of the initial state, kept by hand, and it drifted
+  // the way second copies do: state added and not added to the list stayed behind after a
+  // reset, which is worse than not resetting at all, because the demo then starts from a
+  // position nobody chose. Reloading cannot drift, because every initialiser runs again
+  // exactly as it does on a cold open. The persistence effect has the same hazard for the
+  // same reason and is the next one to go.
   function resetDemo() {
-    setPage("dashboard"); setCurrentRole("All Access (Demo Control)"); setPlaybook({ open: false, focus: null });
-    setDraftRecord(null); setDraftDoc(null); setRedlineDoc(null); setSupplierDraft(null); setDocHistory([]);
-    setSupplierAccepted(null);
-    setChangeDecisions({}); setDocVersion("v1.0");
-    setApprovals(EMPTY_APPROVALS); setReviewInvalidated(null);
-    setReviewActionKey(null); setReviewCommentDraft("");
-    setSentToSupplier(false); setAiChange(null); setAiChangeLoading(false); setChangeRunMeta(null);
-    setExceptionDecisions({}); setExceptionModalKey(null); setRevisionSubmitted({});
-    setShowManualException(false); setManualExceptionDraft({ clause: "", materiality: "Medium", changeType: "Other", impact: "" });
-    setExtraHistory([]);
-    setDocumensoConfig(DOCUMENSO_DEFAULTS); setEnvelope(null); setEnvelopeError(""); setEnvelopeSending(false);
-    setClientSigned(false); setSupplierViewed(false); setSupplierSigned(false); setExecutedPdfBlob(null);
-    setSignatures({ client: null, supplier: null }); setCeremony(null);
-    setExtractedText(null); setExtractingPdf(false); setExtractPdfError("");
-    setAiObligations(null); setObligationRunMeta(null); setValidated({}); setEditingIndex(null); setEditDraft({});
-    setAmendment(null); setShowAmendmentForm(false); setRedlineReopened(false); setDeclineReason("");
-    setSfRecord(null); setSfContext(null); setSfMilestones([]); lastPushed.current = null;
-    setAmendmentDraft({ reason: "", effectiveDate: "" }); setExpiryStage(null); setRenewalTaskCreated(false);
-    setTerminationState(null); setShowTerminationForm(false); setClosureTasks({});
-    setTerminationDraft({ type: "For Convenience", effectiveDate: "", noticeBasis: "90 days per clause 9.1", servedOn: "" });
-    setNotice(""); setAuditLog([]); setNotifications([]); setShowNotifications(false);
-    setExtraContracts([]); setViewingContract(null); setShowAddContract(false);
-    setFilters({ status: "All", supplier: "All", category: "All", term: "All" });
-    setLiveMode(false); setApiKey(""); setApiError("");
-    setEnvelopeRecipients([
-      { name: CLIENT_ENTITY.signatory, email: CLIENT_ENTITY.signatoryEmail, role: "SIGNER", party: "client", onBehalfOf: CLIENT_ENTITY.name },
-      { name: SUPPLIER.signatoryName, email: SUPPLIER.signatoryEmail, role: "SIGNER", party: "supplier", onBehalfOf: SUPPLIER.name },
-    ]);
-    setEnvelopeSubject("");
-    try { window.localStorage.removeItem(PERSIST_KEY); } catch { /* nothing to clear */ }
-    if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
+    clearSnapshot(window.localStorage);
+    window.location.replace(window.location.pathname);
   }
 
   function createContractFromSalesforce(record, context) {
     setSfRecord(record);
     setSfContext(context);
     setPage("draft");
+    // Deliberately unscoped: this precedes the contract, so there is no id to file it
+    // against and the previous draft's id would be the wrong answer.
     logAudit(
       `Contract initiation opened from Salesforce for supplier ${record.Name} `
-      + `(${record.Supplier_Onboarding_Id__c || record.Id}), ${Object.keys(context).length} fields carried across`
+      + `(${record.Supplier_Onboarding_Id__c || record.Id}), ${Object.keys(context).length} fields carried across`,
+      null
     );
     flash(`Opened with ${record.Name}'s context from Salesforce.`);
   }
@@ -597,7 +656,7 @@ export default function CLMApp() {
     setDraftRecord({ id, templateCode, agreementTypeCode, values: merged, evergreen });
     setDraftDoc(doc);
     setDocHistory([{ key: "v1.0", label: "Draft assembled from the template", at: stampNow(), doc }]);
-    setDocVersion("v1.0");
+    setDocVersion("draft");
     setPage("workspace");
     const template = TEMPLATE_BY_CODE[templateCode];
     logAudit(`Draft ${id} created from ${template?.name} (${evergreen ? "evergreen" : "fixed term"}) with ${doc.blocks.filter((b) => b.type === "clause").length} clauses assembled`);
@@ -639,17 +698,38 @@ export default function CLMApp() {
   // to the counterparty, because a change they have never seen cannot be something they
   // agreed to, and the alternative was accepting our own edits and taking a document to
   // signature that the other side never negotiated.
+  function approveCounter(changeId) {
+    const row = counterRows.find((r) => r.change.id === changeId);
+    if (!row || !canApproveCounter(currentRole, row)) return;
+    setCounterApprovals((prev) => ({
+      ...prev,
+      [changeId]: { by: currentRole, role: row.requiredRole, at: stampNow() },
+    }));
+    logAudit(
+      `Counter-proposal on clause ${row.change.clauseRef} approved as ${row.requiredRole}`
+      + `${row.escalated ? ` (escalation recorded by ${row.recordedBy})` : ""}`
+      + `: ${row.assessment?.verdict || "position approved"}`
+    );
+    flash(`Clause ${row.change.clauseRef} counter approved.`);
+  }
+
   function sendCounterToSupplier() {
     if (!redlineDoc || !counterChanges.length) return;
-    const counterDoc = markChangesSent(redlineDoc, CLIENT_ENTITY.signatory);
+    // Nothing we have not approved reaches them, as nothing they have not seen reaches
+    // signature. The two rules are the same rule pointing in opposite directions.
+    if (!counterCleared) { flash(counterBlocked || "This counter-proposal needs approval first."); return; }
+    const counterDoc = handToCounterparty(redlineDoc, CLIENT_ENTITY.signatory);
     setRedlineDoc(counterDoc);
     keepVersion(counterDoc, `Counter-proposal sent to ${SUPPLIER.name}`);
     setRedlineReopened(true);
     setSupplierDraft(null);
+    // The approvals were given for the changes that have now gone. The next round's
+    // counters are approved on their own merits.
+    setCounterApprovals({});
     supersedeEnvelope("we returned a counter-proposal, so the signed text was superseded");
     logAudit(
       `${counterChanges.length} counter-proposal${counterChanges.length === 1 ? "" : "s"} sent back to `
-      + `${SUPPLIER.name} for a further round`
+      + `${SUPPLIER.name} for a further round: document now ${counterDoc.meta.version}`
     );
     notify(SUPPLIER.name, `${draftRecord?.id}: counter-proposal returned, your markup is requested`);
     flash(`Sent back to ${SUPPLIER.name}. They can mark it up again.`);
@@ -719,6 +799,34 @@ export default function CLMApp() {
   // only routes out of the portal were marking the document up or silence, and silence
   // left our own counter-proposals sitting unagreed forever. Accepting records that they
   // read it and agreed, and settles the proposals we had put to them.
+  // The scheduled sweep.
+  //
+  // Everything else in monitoring is computed when somebody looks. This is the one job
+  // that has to run whether or not anybody does, because it records that a deadline
+  // passed and what that did to the contract. Run it late and the fact is still true;
+  // never run it and the contract quietly changed with nothing to show for it.
+  function runDailySweep(at = TODAY) {
+    const register = (aiObligations || [])
+      .map((obligation, index) => ({ index, obligation, entry: obligationLog[obligation.id] }))
+      .filter((r) => validated[r.obligation.id] && r.entry);
+    const due = sweep(register, at);
+    if (!due.length) {
+      logAudit(`Scheduled sweep ran on ${at}: nothing had lapsed`);
+      flash("Sweep ran. Nothing had lapsed.");
+      return;
+    }
+    setObligationLog((log) => {
+      const next = { ...log };
+      for (const hit of due) next[hit.obligation.id] = applyLapse(next[hit.obligation.id], { at: hit.dueDate, effect: hit.effect });
+      return next;
+    });
+    for (const hit of due) {
+      logAudit(`Deadline lapsed on ${hit.dueDate}: ${hit.obligation.name} (${hit.obligation.clause}). ${hit.effect}`);
+      notify(CONTRACT_OWNER, `${draftRecord?.id}: ${hit.obligation.clause} lapsed on ${hit.dueDate}. ${hit.effect}`);
+    }
+    flash(`Sweep ran. ${due.length} deadline${due.length === 1 ? "" : "s"} lapsed.`);
+  }
+
   function supplierAcceptAsSent() {
     const at = stampNow();
     const agreed = (redlineDoc?.changes || []).filter((c) => c.author === CLIENT_ENTITY.signatory && c.sent);
@@ -749,7 +857,7 @@ export default function CLMApp() {
     supersedeEnvelope("the counterparty returned a further redline, so the signed text was superseded");
     setRedlineDoc(doc);
     setSupplierDraft(null);
-    setDocVersion("v1.1");
+    setDocVersion("redline");
     keepVersion(doc, `Redline returned by ${SUPPLIER.name}`);
     if (redlineReopened) { setAiChange(null); setChangeDecisions({}); setExceptionDecisions({}); setRedlineReopened(false); }
     logAudit(`Redline received from ${SUPPLIER.name}: ${doc.changes.length} tracked changes, ${doc.comments.length} comments`);
@@ -795,7 +903,7 @@ export default function CLMApp() {
 
   async function runChangeIntelligence() {
     if (!redlineDoc) return;
-    setAiChangeLoading(true); setApiError("");
+    setAiChangeLoading(true); setApiError(""); setFindingsStale(null);
     if (liveMode && apiKey) {
       try {
         const result = await callLiveAI(provider, apiKey, model, buildChangePrompt(redlineDoc.changes, referenceGraph));
@@ -867,7 +975,8 @@ export default function CLMApp() {
       author: SUPPLIER.signatoryName, role: "Supplier", date: stampNow(),
     });
     setRedlineDoc(revised);
-    setDocVersion("v1.1");
+    setDocVersion("redline");
+    keepVersion(revised, `Revised clause ${ref} from ${SUPPLIER.name}`);
 
     // The old change is gone, so its decision and its markup decision go with it.
     const oldChangeId = redlineDoc.changes.find((c) => c.clauseRef === ref)?.id;
@@ -876,7 +985,7 @@ export default function CLMApp() {
     setRevisionSubmitted((r) => ({ ...r, [ref]: true }));
 
     // Re-derive so the panel reflects the new proposal rather than the withdrawn one.
-    if (aiChange) setAiChange(deriveFindings(revised, referenceGraph));
+    if (aiChange) { setAiChange(deriveFindings(revised, referenceGraph)); setFindingsStale(null); }
 
     setExtraHistory((h) => [...h, {
       v: revised.meta.version,
@@ -911,9 +1020,13 @@ export default function CLMApp() {
   function editActiveDoc(apply, audit) {
     const target = redlineDoc ? setRedlineDoc : setDraftDoc;
     target((doc) => (doc ? apply(doc) : doc));
-    setDocVersion(redlineDoc ? "v1.1" : "v1.0");
+    setDocVersion(redlineDoc ? "redline" : "draft");
     logAudit(audit);
-    if (!redlineDoc) invalidateReview(audit);
+    if (!redlineDoc) { invalidateReview(audit); return; }
+    // Findings are derived from the tracked changes. Editing the redline changes those,
+    // so what is on the panel was computed against a document that no longer exists, and
+    // our own counter carries no band until it is re-derived.
+    if (aiChange) setFindingsStale({ reason: audit, at: stampNow() });
   }
 
   // An approval is given against a text, not against a contract.
@@ -1290,6 +1403,7 @@ export default function CLMApp() {
       <nav className="nav" style={{ position: "relative" }}>
         <span className="nav-brand">FM Supplier CLM</span>
         {TABS.map(([label, key]) => nav(label, key))}
+        {canReadAudit(currentRole) && nav("Audit trail", "audit")}
 
         <div className="field" style={{ margin: 0, minWidth: 210 }}>
           <select
@@ -1372,7 +1486,7 @@ export default function CLMApp() {
 
       {apiError && (
         <div className="clm-wrap" style={{ paddingTop: "var(--space-3)" }}>
-          <div style={{ background: "#fdf1da", border: "1px solid #f5dfa8", color: "#7a4a05", padding: 10, fontSize: 12.5 }}>
+          <div role="alert" style={{ background: "#fdf1da", border: "1px solid #f5dfa8", color: "#7a4a05", padding: 10, fontSize: 12.5 }}>
             Live API error: {apiError}
           </div>
         </div>
@@ -1395,6 +1509,15 @@ export default function CLMApp() {
                 assessFor={assessFor}
                 obligations={aiObligations}
                 validatedCount={Object.keys(validated).length}
+                liveObligationCounts={contractIsLive ? {
+                  // A lapsed deadline sits with overdue rather than in a fifth colour: it
+                  // is past its date and unresolved, and dropping it because the estate
+                  // chart has four states would hide the worst thing on the register.
+                  overdue: monitorNow.overdue + monitorNow.lapsed,
+                  due: monitorNow.due,
+                  onTrack: monitorNow.upcoming + monitorNow.met,
+                  watch: monitorNow.watch,
+                } : null}
                 onOpenPlaybook={openPlaybook}
                 onGoToContracts={() => setPage("contracts")}
                 onGoToWorkspace={(c) => (c.live ? setPage("workspace") : setViewingContract(c))}
@@ -1413,6 +1536,17 @@ export default function CLMApp() {
                 onDraft={() => setPage("draft")}
                 onQuickAdd={() => setShowAddContract(true)}
               />
+            )}
+
+            {page === "audit" && (
+              canReadAudit(currentRole)
+                ? <AuditPage auditLog={auditLog} role={currentRole} />
+                : (
+                  <p style={{ textAlign: "center", opacity: 0.6, padding: "var(--space-8) 0", fontSize: 14 }}>
+                    The estate-wide audit trail is read by the Auditor role. Your contract's own events are on its
+                    workspace.
+                  </p>
+                )
             )}
 
             {page === "draft" && (
@@ -1480,7 +1614,7 @@ export default function CLMApp() {
                 docVersion={docVersion}
                 setDocVersion={setDocVersion}
                 versions={versions}
-                watermark={docVersion === "v1.0" && !reviewComplete ? "DRAFT" : null}
+                watermark={docVersion === "draft" && !reviewComplete ? "DRAFT" : null}
                 changeDecisions={changeDecisions}
                 onAcceptChange={(id, status) => setChange(id, status || "accepted")}
                 onRejectChange={(id) => setChange(id, "rejected")}
@@ -1490,6 +1624,7 @@ export default function CLMApp() {
                 onEditClause={editClause}
                 onInsertClause={insertPlaybookClause}
                 onDeleteClause={deleteClause}
+                citationsFor={citationsFor}
                 onDiscardChange={discardOwnChange}
                 supplierAccepted={supplierAccepted}
                 currentAuthor={CLIENT_ENTITY.signatory}
@@ -1512,6 +1647,12 @@ export default function CLMApp() {
                 onSendToSupplier={sendToSupplier}
                 counterChanges={counterChanges}
                 onSendCounter={sendCounterToSupplier}
+                counterRows={counterRows}
+                counterCleared={counterCleared}
+                counterBlocked={counterBlocked}
+                onApproveCounter={approveCounter}
+                canApproveCounter={(row) => canApproveCounter(currentRole, row)}
+                findingsStale={findingsStale}
                 aiChange={aiChange}
                 aiChangeLoading={aiChangeLoading}
                 runChangeIntelligence={runChangeIntelligence}
@@ -1553,6 +1694,7 @@ export default function CLMApp() {
                     obligations={aiObligations}
                     trackedCount={trackedObligationCount}
                     validatedCount={Object.keys(validated).length}
+                    monitor={monitorNow}
                     noticeDays={Number(draftRecord.values.notice_period_days) || 90}
                     onGoToObligations={() => setPage("obligations")}
                     amendment={amendment}
@@ -1614,9 +1756,40 @@ export default function CLMApp() {
                 editDraft={editDraft}
                 setEditDraft={setEditDraft}
                 onValidate={(i, o) => {
-                  setValidated((v) => ({ ...v, [i]: true }));
-                  logAudit(`Obligation validated: ${o.name} (${o.clause})`);
-                  flash("Obligation validated. Reminders active.");
+                  setValidated((v) => ({ ...v, [o.id]: true }));
+                  const first = suggestedFirstDue(o, { start: draftRecord?.values?.start_date || CONTRACT_START, today: TODAY });
+                  setObligationLog((log) => ({
+                    ...log,
+                    [o.id]: { dueDate: first, history: [], closed: false, validatedAt: stampNow() },
+                  }));
+                  logAudit(
+                    `Obligation validated: ${o.name} (${o.clause})`
+                    + (first ? `, first due ${first}` : ", watch-listed with no scheduled date")
+                  );
+                  flash(first ? `Validated. First due ${first}.` : "Validated and watch-listed.");
+                }}
+                obligationLog={obligationLog}
+                today={TODAY}
+                onRunSweep={runDailySweep}
+                amendmentReview={amendmentReview}
+                onRegisterReviewed={() => {
+                  setRegisterReviewed(amendment?.id || null);
+                  logAudit(`Obligation register reviewed against amendment ${amendment?.id}`);
+                  flash("Register marked as reviewed against the amendment.");
+                }}
+                onSetDue={(o, iso) => {
+                  setObligationLog((log) => ({ ...log, [o.id]: { ...(log[o.id] || { history: [] }), dueDate: iso || null } }));
+                  logAudit(`Obligation due date set to ${iso || "none"} for ${o.clause}`);
+                }}
+                onRecordPerformance={(o, entry) => {
+                  const next = recordPerformance(obligationLog[o.id], o, entry);
+                  setObligationLog((log) => ({ ...log, [o.id]: next }));
+                  logAudit(
+                    `Performance recorded against ${o.name} (${o.clause}) on ${entry.at}`
+                    + (entry.evidence ? `, evidence: ${entry.evidence}` : ", no evidence attached")
+                    + (next.dueDate ? `. Next due ${next.dueDate}` : ". Closed, no further occurrence")
+                  );
+                  flash(next.dueDate ? `Recorded. Next due ${next.dueDate}.` : "Recorded. Obligation closed.");
                 }}
                 onSaveEdit={(i) => {
                   setAiObligations((list) => list.map((row, idx) => (idx === i ? { ...row, ...editDraft } : row)));
@@ -1625,14 +1798,17 @@ export default function CLMApp() {
                 onDelete={(i, o) => {
                   if (!window.confirm(`Remove "${o.name}"?`)) return;
                   setAiObligations((list) => list.filter((_, idx) => idx !== i));
-                  setValidated((v) => { const n = { ...v }; delete n[i]; return n; });
+                  // Keyed by the obligation's own id, so removing one leaves every other
+                  // row's validation and performance record exactly where it was.
+                  setValidated((v) => { const n = { ...v }; delete n[o.id]; return n; });
+                  setObligationLog((l) => { const n = { ...l }; delete n[o.id]; return n; });
                   logAudit(`Obligation removed: ${o.name}`); flash("Obligation removed.");
                 }}
                 onAdd={() => {
                   const name = window.prompt("Obligation description:");
                   if (!name?.trim()) return;
                   setAiObligations((list) => [...(list || []), {
-                    id: `OBL-M${(list?.length || 0) + 1}`, clause: "-", name: name.trim(), responsible: "Supplier",
+                    id: `OBL-M-${shortId()}`, clause: "-", name: name.trim(), responsible: "Supplier",
                     notify: "", frequency: "As required", due: "-", evidence: "-",
                     consequence: "-", confidence: "N/A", manual: true,
                   }]);
@@ -1716,6 +1892,20 @@ export default function CLMApp() {
                 onReplyToComment={(id, text) => replyToComment(id, text, SUPPLIER.signatoryName)}
                 onResolveComment={(id) => resolveComment(id, SUPPLIER.signatoryName)}
                 onAddComment={supplierAddComment}
+                obligations={aiObligations || []}
+                obligationLog={obligationLog}
+                validated={validated}
+                today={TODAY}
+                onSupplierRecord={(o, entry) => {
+                  const next = recordPerformance(obligationLog[o.id], o, entry);
+                  setObligationLog((log) => ({ ...log, [o.id]: next }));
+                  logAudit(
+                    `${SUPPLIER.name} recorded performance against ${o.name} (${o.clause}) on ${entry.at}`
+                    + (entry.evidence ? `, evidence: ${entry.evidence}` : ", no evidence attached")
+                  );
+                  notify(CONTRACT_OWNER, `${SUPPLIER.name} recorded delivery of ${o.clause}: ${o.name}`);
+                  flash(next.dueDate ? `Recorded. Next due ${next.dueDate}.` : "Recorded.");
+                }}
                 onSupplierView={() => { setSupplierViewed(true); logAudit("Envelope viewed by supplier"); }}
                 onSupplierSign={() => setCeremony("supplier")}
                 waitingOnSigner={waitingOnSigner}
@@ -2024,7 +2214,8 @@ export default function CLMApp() {
                 routedTo: type?.riskLevel === "high" ? ["legal", "contract_management"] : ["contract_management"],
                 owner: CONTRACT_OWNER, requestedBy: SUPPLIER.businessOwner,
               }]);
-              logAudit(`Contract ${id} quick-added (${newContract.supplier.trim()})`);
+              // Against the contract it creates, not the one that happened to be open.
+              logAudit(`Contract ${id} quick-added (${newContract.supplier.trim()})`, id);
               flash(`${id} added and routed.`);
               setNewContract({ supplier: "", agreementTypeCode: "sow", category: "", evergreen: false });
               setShowAddContract(false);
@@ -2033,15 +2224,25 @@ export default function CLMApp() {
         </SmallDialog>
       )}
 
-      {notice && <div className="clm-notice">{notice}</div>}
+      {/* The only confirmation that an action worked. Announced, or it confirms nothing
+          to anyone reading by screen reader. */}
+      <div className="clm-notice-live" role="status" aria-live="polite">
+        {notice && <div className="clm-notice">{notice}</div>}
+      </div>
     </div>
   );
 }
 
 function SmallDialog({ title, kicker: k, children, onClose }) {
+  // Mounted only while open, so it is open whenever it exists. aria-modal on its own is
+  // an assertion the keyboard does not honour; this is the half that makes it true.
+  const focusRef = useModalFocus(true, onClose);
   return (
     <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" style={{ width: "min(520px, 95vw)" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        ref={focusRef} tabIndex={-1} className="dialog" style={{ width: "min(520px, 95vw)" }}
+        onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={title}
+      >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--space-3)", marginBottom: 8 }}>
           <div>
             {k && <div className="card-kicker">{k}</div>}

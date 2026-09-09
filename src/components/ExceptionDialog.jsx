@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus.js";
 import {
   X, MessageSquare, CornerDownRight, Link2, AlertTriangle, BookOpen, ArrowRight,
 } from "lucide-react";
@@ -17,6 +18,7 @@ export default function ExceptionDialog({
   contractId, supplierName,
   onClose, onDecide, onOpenPlaybook, onResolveEscalation, onReply, onResolveComment, flash,
 }) {
+  const focusRef = useModalFocus(Boolean(finding), onClose);
   const [reason, setReason] = useState("");
   if (!finding) return null;
 
@@ -28,7 +30,10 @@ export default function ExceptionDialog({
 
   return (
     <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        ref={focusRef} tabIndex={-1} className="dialog"
+        onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
+      >
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--space-3)" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>

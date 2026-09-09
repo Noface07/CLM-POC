@@ -139,7 +139,7 @@ export function applyRedline(doc, edits, who) {
   };
 }
 
-function bumpVersion(version) {
+export function bumpVersion(version) {
   const match = String(version || "v1.0").match(/v(\d+)\.(\d+)/);
   if (!match) return "v1.1";
   return `v${match[1]}.${Number(match[2]) + 1}`;
@@ -147,18 +147,96 @@ function bumpVersion(version) {
 
 // Editing a clause in place.
 //
-// The diff is taken from the clause's ORIGINAL text, not from what is on screen, so a
-// second edit to the same clause reads as one revision from the agreed wording rather
-// than as a revision of somebody else's markup. That is also why the previous change on
-// the clause is replaced: one clause carries one open proposal, which is the thing a
-// reviewer decides on.
+// Two different things wear the same button, and they are not the same move.
+//
+// **Revising our own unsent markup.** We proposed something, we have not sent it, we
+// change our mind. That is one open proposal being rewritten, so it is diffed from the
+// clause's ORIGINAL wording and replaces itself: a reviewer sees one revision from the
+// agreed text, not a trail through positions we never put to anybody.
+//
+// **Countering theirs.** They struck 12 and proposed 6; we say 9. This is not a revision
+// of the agreed wording, it is a rejection of their number and a counter to it, and
+// recording it as "12 becomes 9" states two falsehoods: that we moved off 12 on our own
+// initiative, and that they never asked for 6. The second one matters most, because
+// their proposal and the reason they gave for it are the negotiation record.
+//
+// So a counter keeps their markup and layers ours on top, the way Word does when you
+// edit someone else's tracked change. The base they struck stays struck, their insertion
+// is marked superseded by ours rather than deleted out of the document, and `previous`
+// on our change is THEIR text, because that is the position we are answering. Their
+// change record survives as superseded: it is decided by ours, not separately, and it is
+// still there to be read.
+function runLength(run) {
+  return (run.t === "token"
+    ? (run.value != null && run.value !== "" ? run.value : `[${run.name}]`)
+    : run.text || "").length;
+}
+
+/**
+ * Layer our counter over the markup already on the clause.
+ *
+ * Their deletions of the agreed wording stay exactly where they are, because that is the
+ * record of what they struck and it is not ours to remove. Everything still visible is
+ * their proposal, so our diff is taken against that, and the two are interleaved by
+ * position rather than one replacing the other. Clause 5.1 ends up reading
+ * `within ~~12~~ ~~6~~ 9 days`: what we drafted, what they asked for, what we answered.
+ *
+ * Where our deletion lands on text they inserted, the run carries who proposed it, so
+ * the document can say "proposed by them, struck by us" rather than crediting us with
+ * deleting wording that was never in the contract.
+ *
+ * @returns the new runs, or null if the proposal changes nothing.
+ */
+function layerCounter(runs, proposed, who, changeId) {
+  const theirDeletions = [];
+  const insertedSpans = [];
+  let offset = 0;
+  for (const run of runs) {
+    if (run.t === "del") { theirDeletions.push({ at: offset, run }); continue; }
+    const length = runLength(run);
+    if (run.t === "ins") insertedSpans.push({ from: offset, to: offset + length, author: run.author });
+    offset += length;
+  }
+
+  const standing = runsToText(runs);
+  const ours = diffToRuns(standing, proposed, { author: who.author, date: who.date, changeId });
+  if (!ours.some((r) => r.t === "ins" || r.t === "del")) return null;
+
+  const out = [];
+  let consumed = 0;
+  let next = 0;
+  const flush = () => { while (next < theirDeletions.length && theirDeletions[next].at <= consumed) out.push(theirDeletions[next++].run); };
+
+  flush();
+  for (const run of ours) {
+    if (run.t === "ins") { out.push(run); continue; }
+    if (run.t === "del") {
+      const span = insertedSpans.find((i) => consumed < i.to && consumed + run.text.length > i.from);
+      out.push(span ? { ...run, wasProposedBy: span.author } : run);
+    } else {
+      out.push(run);
+    }
+    consumed += run.text.length;
+    flush();
+  }
+  while (next < theirDeletions.length) out.push(theirDeletions[next++].run);
+  return out;
+}
+
 export function applyClauseEdit(doc, clauseRef, proposed, who) {
   const changeId = `chg-${++changeCounter}`;
   let applied = false;
   let inserted = false;
   let previous = "";
+  let base = "";
+  let countered = null;
   let heading;
   let playbookCode;
+
+  // The other side's open proposal on this clause, if there is one. Ours is not a
+  // counter to itself.
+  const theirOpen = (doc.changes || []).find((c) =>
+    c.clauseRef === clauseRef && c.author !== who.author && c.status !== "superseded");
 
   const blocks = doc.blocks.map((block) => {
     if (block.ref !== clauseRef) return block;
@@ -180,14 +258,39 @@ export function applyClauseEdit(doc, clauseRef, proposed, who) {
       };
     }
 
-    previous = runsToOriginalText(block.runs);
+    const original = runsToOriginalText(block.runs);   // the agreed wording behind the markup
+    const standing = runsToText(block.runs);           // what is actually on the table now
+
+    if (theirOpen) {
+      // Retyping their wording unchanged is not a counter-proposal. The diff path below
+      // catches this for itself by producing no runs; the layered path has to be told.
+      if (norm(proposed) === norm(standing)) return block;
+      const layered = layerCounter(block.runs, proposed, who, changeId);
+      if (!layered) return block;
+      previous = standing;
+      base = original;
+      countered = theirOpen.id;
+      applied = true;
+      return { ...block, runs: layered };
+    }
+
+    previous = original;
+    base = original;
     const runs = diffToRuns(previous, proposed, { author: who.author, date: who.date, changeId });
     applied = runs.some((r) => r.t === "ins" || r.t === "del");
     return applied ? { ...block, runs } : { ...block, runs: [{ t: "text", text: previous }] };
   });
 
   const prior = (doc.changes || []).find((c) => c.clauseRef === clauseRef);
-  const changes = (doc.changes || []).filter((c) => c.clauseRef !== clauseRef);
+  // Our own earlier proposal on this clause is replaced. Theirs is kept and marked, so
+  // the record still shows what they asked for and what it was answered with.
+  const changes = (doc.changes || []).flatMap((c) => {
+    if (c.clauseRef !== clauseRef) return [c];
+    if (applied && countered && c.id === countered) {
+      return [{ ...c, status: "superseded", supersededBy: changeId }];
+    }
+    return c.author === who.author ? [] : [c];
+  });
   if (applied) {
     changes.push({
       id: changeId,
@@ -198,8 +301,10 @@ export function applyClauseEdit(doc, clauseRef, proposed, who) {
       authorRole: who.role,
       date: who.date,
       previous,
-      proposed,
+      base,
+      counters: countered || undefined,
       status: "pending",
+      proposed,
       authored: true,
       inserted: inserted || undefined,
     });
@@ -306,6 +411,24 @@ export function unsentChangesBy(doc, author) {
   return (doc?.changes || []).filter((c) => c.author === author && !c.sent);
 }
 
+/**
+ * Handing the document back to the other side.
+ *
+ * The version moves when the document changes hands, and it moved in only one direction
+ * before this existed: their markup came back as a new version, our counter went out
+ * carrying the number they had given us. That put two materially different contracts
+ * into the world under one version, and one of them was a .docx that had left the
+ * building. A version that only advances when the counterparty acts is not a version of
+ * the document, it is a count of their turns.
+ */
+export function handToCounterparty(doc, author, status = "Counter-proposal sent") {
+  if (!doc) return doc;
+  return {
+    ...markChangesSent(doc, author),
+    meta: { ...doc.meta, version: bumpVersion(doc.meta?.version), status },
+  };
+}
+
 // Whose markup is sitting on this clause, if anybody's.
 export function pendingAuthorOn(doc, clauseRef, decisions = {}) {
   const block = (doc.blocks || []).find((b) => b.ref === clauseRef);
@@ -353,6 +476,47 @@ export function discardChange(doc, changeId) {
 // as anything the counterparty proposed. `insertedBy` marks the block as owing its whole
 // existence to that change, which is what lets a rejection remove the paragraph rather
 // than leave an empty one behind.
+// Clause references sort as numbers, not as strings: 10.2 comes after 9.1, and "7.2A"
+// sits just after 7.2 rather than anywhere near 7.21.
+export function compareRefs(a, b) {
+  const parts = (ref) => String(ref || "").split(".").map((p) => {
+    const digits = parseInt(p, 10);
+    return { n: Number.isFinite(digits) ? digits : 0, suffix: p.replace(/^\d*/, "") };
+  });
+  const left = parts(a);
+  const right = parts(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = left[i] || { n: -1, suffix: "" };
+    const y = right[i] || { n: -1, suffix: "" };
+    if (x.n !== y.n) return x.n - y.n;
+    if (x.suffix !== y.suffix) return x.suffix < y.suffix ? -1 : 1;
+  }
+  return 0;
+}
+
+// Where a clause belongs, by its number rather than by where the mouse let go.
+//
+// A contract is an ordered document: 4.2 sits between 4.1 and 4.3, and dropping it
+// anywhere else produces a numbering the reader has to work around. So the drop point
+// picks the clause, and the clause's own reference picks the position.
+//
+// It lands after the last lower-numbered clause, which also keeps it under the right
+// section heading: inserting before the next higher clause would put 4.2 underneath the
+// "5. CHARGES AND PAYMENT" heading.
+export function positionForRef(blocks, ref) {
+  let at = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.type !== "clause" || !block.ref) continue;
+    if (compareRefs(block.ref, ref) < 0) at = i;
+  }
+  if (at >= 0) return at + 1;
+
+  // Nothing smaller: sit before the first clause, after the title and any heading.
+  const first = blocks.findIndex((b) => b.type === "clause" && b.ref);
+  return first === -1 ? blocks.length : first;
+}
+
 export function insertClauseBlock(doc, { afterRef, ref, heading, text, playbookCode }, who) {
   const changeId = `chg-${++changeCounter}`;
   const taken = new Set((doc.blocks || []).map((b) => b.ref).filter(Boolean));
@@ -375,8 +539,7 @@ export function insertClauseBlock(doc, { afterRef, ref, heading, text, playbookC
   };
 
   const blocks = [...(doc.blocks || [])];
-  const at = afterRef ? blocks.findIndex((b) => b.ref === afterRef) : -1;
-  blocks.splice(at === -1 ? blocks.length : at + 1, 0, block);
+  blocks.splice(positionForRef(blocks, finalRef), 0, block);
 
   return {
     ...doc,
@@ -405,6 +568,13 @@ export function runsToText(runs) {
     .join("");
 }
 
+// Comparing wording, not whitespace: the tokenizer and the editor disagree about
+// trailing spaces often enough that an untrimmed comparison calls an unchanged clause
+// changed.
+function norm(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
 export function runsToOriginalText(runs) {
   return (runs || [])
     .filter((r) => r.t !== "ins")
@@ -413,6 +583,7 @@ export function runsToOriginalText(runs) {
 }
 
 export function resolveChanges(doc, decisions) {
+  const byId = new Map((doc.changes || []).map((c) => [c.id, c]));
   const blocks = doc.blocks.filter((block) => {
     // A clause that exists only because it was dropped in leaves nothing behind when the
     // insertion is rejected, rather than an empty numbered paragraph.
@@ -423,7 +594,13 @@ export function resolveChanges(doc, decisions) {
     if (!(block.runs || []).some((r) => r.changeId)) return block;
     const runs = [];
     for (const run of block.runs) {
-      const decision = run.changeId ? decisions[run.changeId] : null;
+      // A proposal we countered is decided by the counter, not separately: accept ours
+      // and their deletion of the agreed wording takes effect with it; reject ours and
+      // their proposal is open again, exactly as it was.
+      const owner = run.changeId ? byId.get(run.changeId) : null;
+      const decision = owner?.supersededBy
+        ? (decisions[owner.supersededBy] === "accepted" ? "accepted" : "pending")
+        : (run.changeId ? decisions[run.changeId] : null);
       if (!decision || decision === "pending") { runs.push(run); continue; }
       if (decision === "accepted") {
         if (run.t === "del") continue;                        // deletion takes effect
@@ -458,8 +635,17 @@ function mergeAdjacentText(runs) {
   return out;
 }
 
+// A superseded change is not undecided, it is answered: our counter carries it, and
+// counting it as outstanding would block signature on a proposal nobody can act on
+// separately any more.
+export function isSuperseded(change) {
+  return change?.status === "superseded" || Boolean(change?.supersededBy);
+}
+
 export function pendingChangeCount(doc, decisions) {
-  return (doc.changes || []).filter((c) => !decisions[c.id] || decisions[c.id] === "pending").length;
+  return (doc.changes || [])
+    .filter((c) => !isSuperseded(c))
+    .filter((c) => !decisions[c.id] || decisions[c.id] === "pending").length;
 }
 
 function materialityFor(assessment) {
@@ -481,7 +667,7 @@ export function deriveFindings(doc, graph) {
     }
   }
 
-  return (doc.changes || []).map((change) => {
+  return (doc.changes || []).filter((c) => !isSuperseded(c)).map((change) => {
     const clause = change.playbookCode ? CLAUSE_BY_CODE[change.playbookCode] : null;
     const label = `${change.clauseRef} ${change.clauseHeading || clause?.name || ""}`.trim();
 
