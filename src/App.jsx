@@ -40,6 +40,9 @@ import {
 } from "./lib/documenso.js";
 import { downloadBlob } from "./lib/zip.js";
 import { readSnapshot, writeSnapshot, clearSnapshot } from "./lib/session.js";
+import {
+  computeApprovalStatus, computeContractStatus, invalidationSatisfied,
+} from "./lib/lifecycle.js";
 import { makeEntry as makeAuditEntry } from "./lib/audit.js";
 import { useModalFocus } from "./lib/useModalFocus.js";
 import {
@@ -134,41 +137,7 @@ const EMPTY_APPROVALS = {
   legal: { status: "pending", comment: "" },
 };
 
-function computeApprovalStatus(approvals, exists, aiChange, undecided, blocked) {
-  if (!exists) return "Not Started";
-  const vals = Object.values(approvals).map((a) => a.status);
-  if (vals.includes("rejected")) return "Rejected";
-  if (vals.includes("changes")) return "Changes Requested";
-  if (aiChange && (undecided > 0 || blocked > 0)) return "Exception Approval Required";
-  if (vals.every((v) => v === "approved")) return "Approved";
-  return "In Progress";
-}
 
-function computeContractStatus(ctx) {
-  const {
-    exists, terminationState, envelopeStatus, renewalTaskCreated, amendmentCreated, amendmentExecuted,
-    expiryStage, aiChange, undecided, blocked, redlineReceived, sentToSupplier, approvalStatus,
-    readyForSignature, envelope, anyReviewerActed,
-  } = ctx;
-  if (!exists) return "Draft";
-  if (terminationState === "terminated") return "Terminated";
-  if (terminationState === "in_progress") return "Termination in Progress";
-  if (envelopeStatus === "COMPLETED") {
-    if (expiryStage === "expired") return "Expired";
-    if (renewalTaskCreated) return "Renewal in Progress";
-    if (amendmentCreated && !amendmentExecuted) return "Amendment in Progress";
-    if (expiryStage === "reminders") return "Expiring";
-    return "Active";
-  }
-  if (["REJECTED", "CANCELLED"].includes(envelopeStatus)) return "In Negotiation";
-  if (envelopeStatus === "PENDING") return "Signature Pending";
-  if (readyForSignature && !envelope) return "Ready for Signature";
-  if (aiChange && (undecided > 0 || blocked > 0)) return "Exception Review";
-  if (redlineReceived || sentToSupplier) return "In Negotiation";
-  if (approvalStatus === "Approved") return "Approved";
-  if (anyReviewerActed) return "Internal Review";
-  return "Draft";
-}
 
 export default function CLMApp() {
   const [page, setPage] = useState(() =>
@@ -213,6 +182,10 @@ export default function CLMApp() {
   // Re-deriving on every keystroke would spend a live API call per edit, so it says so
   // and offers the button instead of deciding for the user.
   const [findingsStale, setFindingsStale] = useState(() => restored("findingsStale", null));
+  // Which document the findings on screen were derived from. Findings are about a
+  // specific version; shown against any other one they are describing something the
+  // reader is not looking at.
+  const [aiChangeFor, setAiChangeFor] = useState(() => restored("aiChangeFor", null));
   const [declineReason, setDeclineReason] = useState(() => restored("declineReason", ""));
   const [showManualException, setShowManualException] = useState(false);
   const [manualExceptionDraft, setManualExceptionDraft] = useState({ clause: "", materiality: "Medium", changeType: "Other", impact: "" });
@@ -498,6 +471,9 @@ export default function CLMApp() {
     };
   }, [executedDoc, amendment, draftRecord]);
 
+  // The findings describe one document. Say so when a different one is on screen, and
+  // stop saying it the moment the reader goes back to the one they were derived from.
+  const findingsVersion = aiChangeFor;
   const activeDoc = docVersion === "redline" ? redlineDoc
     : docVersion === "executed" ? executedDoc
     : docVersion === "amended" ? (amendedDoc || executedDoc)
@@ -515,7 +491,7 @@ export default function CLMApp() {
       draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
       exceptionDecisions, envelope, aiObligations, validated, obligationLog, registerReviewed, sentToSupplier,
       redlineReopened, declineReason, approvalMatrix, sfRecord, sfContext, sfMilestones, amendment,
-      counterApprovals, findingsStale,
+      counterApprovals, findingsStale, aiChangeFor,
       clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
       closureTasks,
     });
@@ -525,7 +501,7 @@ export default function CLMApp() {
   }, [draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted,
       changeDecisions, approvals, reviewInvalidated, aiChange, exceptionDecisions, envelope,
       aiObligations, validated, obligationLog, registerReviewed, sentToSupplier, redlineReopened, declineReason,
-      approvalMatrix, sfRecord, sfContext, sfMilestones, amendment, counterApprovals, findingsStale,
+      approvalMatrix, sfRecord, sfContext, sfMilestones, amendment, counterApprovals, findingsStale, aiChangeFor,
       clientSigned, supplierViewed,
       supplierSigned, docVersion, auditLog, extraContracts, signatures, closureTasks]);
 
@@ -556,6 +532,15 @@ export default function CLMApp() {
     ...extraHistory.map((h) => ({ ...h, show: true })),
     { v: "v2.0", label: "Executed by both parties", format: ".pdf", show: envelopeStatus === "COMPLETED" },
   ].filter((r) => r.show);
+
+  // The invalidation is a request: look at this again. It ends when they have, whichever
+  // path they took to approve, and it has to end here rather than in one handler because
+  // it was only ever cleared by Resubmit, a button that appears solely after a rejection.
+  // Re-approving left the flag set, and the banner then lay dormant until the approval
+  // status went non-Approved for an unrelated reason and put it back on screen.
+  useEffect(() => {
+    if (reviewInvalidated && invalidationSatisfied(approvals)) setReviewInvalidated(null);
+  }, [approvals, reviewInvalidated]);
 
   const lastPushed = useRef(null);
   useEffect(() => {
@@ -917,6 +902,7 @@ export default function CLMApp() {
   async function runChangeIntelligence() {
     if (!redlineDoc) return;
     setAiChangeLoading(true); setApiError(""); setFindingsStale(null);
+    setAiChangeFor(redlineDoc.meta?.version || "redline");
     if (liveMode && apiKey) {
       try {
         const result = await callLiveAI(provider, apiKey, model, buildChangePrompt(redlineDoc.changes, referenceGraph));
@@ -998,7 +984,11 @@ export default function CLMApp() {
     setRevisionSubmitted((r) => ({ ...r, [ref]: true }));
 
     // Re-derive so the panel reflects the new proposal rather than the withdrawn one.
-    if (aiChange) { setAiChange(deriveFindings(revised, referenceGraph)); setFindingsStale(null); }
+    if (aiChange) {
+      setAiChange(deriveFindings(revised, referenceGraph));
+      setFindingsStale(null);
+      setAiChangeFor(revised.meta?.version || "redline");
+    }
 
     setExtraHistory((h) => [...h, {
       v: revised.meta.version,
@@ -1666,6 +1656,8 @@ export default function CLMApp() {
                 onApproveCounter={approveCounter}
                 canApproveCounter={(row) => canApproveCounter(currentRole, row)}
                 findingsStale={findingsStale}
+                findingsVersion={findingsVersion}
+                viewingVersion={activeDoc?.meta?.version || null}
                 aiChange={aiChange}
                 aiChangeLoading={aiChangeLoading}
                 runChangeIntelligence={runChangeIntelligence}
