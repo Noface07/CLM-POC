@@ -36,6 +36,9 @@ import {
   forContract, contractLabel, UNSCOPED,
 } from "../src/lib/audit.js";
 import { canReadAudit } from "../src/lib/rbac.js";
+import {
+  computeApprovalStatus, computeContractStatus, reviewNeedsReapproval, invalidationSatisfied,
+} from "../src/lib/lifecycle.js";
 import { LIFECYCLE_STAGES, stageForStatus } from "../src/components/LifecycleBar.jsx";
 import { SEQUENTIAL } from "../src/components/charts.jsx";
 
@@ -1281,6 +1284,74 @@ async function main() {
   // The same fact the panel reaches by a different route, which is why both exist.
   check("the finding for the deletion also names what it moves",
     /7\.4/.test(deriveFindings(struck72, buildReferenceGraph(dangleBase)).find((f) => f.clauseRef === "7.2")?.impact || ""));
+
+
+  // ---- The internal-review invalidation ----
+  //
+  // It was cleared in exactly one place: the Resubmit button, which only appears after a
+  // rejection. Re-approving left the flag set, and the banner then lay dormant until the
+  // approval status went non-Approved for an unrelated reason and put it back on screen
+  // telling three people who had just approved to approve again.
+  const allApproved = { owner: { status: "approved" }, procurement: { status: "approved" }, legal: { status: "approved" } };
+  const allPending = { owner: { status: "pending" }, procurement: { status: "pending" }, legal: { status: "pending" } };
+  const oneOut = { ...allApproved, legal: { status: "pending" } };
+
+  check("an invalidation with reviewers still pending asks them to look again",
+    reviewNeedsReapproval({ reason: "edited" }, allPending));
+  check("with one still pending it still asks", reviewNeedsReapproval({ reason: "edited" }, oneOut));
+  check("once they have all approved it stops asking",
+    !reviewNeedsReapproval({ reason: "edited" }, allApproved),
+    "the banner is a request, and it ends when the request is met");
+  check("no invalidation asks nothing", !reviewNeedsReapproval(null, allPending));
+  check("the invalidation is satisfied by unanimous approval", invalidationSatisfied(allApproved));
+  check("and not by a partial one", !invalidationSatisfied(oneOut));
+  check("nor by an empty set", !invalidationSatisfied({}));
+
+  // The exact sequence that produced the stale banner.
+  const seqApproved = computeApprovalStatus(allApproved, true, null, 0, 0);
+  check("all three approved reads as Approved", seqApproved === "Approved");
+  const seqEdited = computeApprovalStatus(allPending, true, null, 0, 0);
+  check("after an edit resets them it reads as In Progress", seqEdited === "In Progress");
+  const seqExceptions = computeApprovalStatus(allApproved, true, [{}], 3, 0);
+  check("a redline with open exceptions reads as Exception Approval Required",
+    seqExceptions === "Exception Approval Required",
+    "which is not the reviewers' business, and is why the banner cannot key on completeness");
+  check("the reviewers are nonetheless done at that point",
+    !reviewNeedsReapproval({ reason: "edited" }, allApproved),
+    "keyed on completeness this is where the stale banner came back");
+
+  check("a rejection outranks the exception state", computeApprovalStatus({ ...allApproved, legal: { status: "rejected" } }, true, [{}], 3, 0) === "Rejected");
+  check("a change request does too", computeApprovalStatus({ ...allApproved, legal: { status: "changes" } }, true, [{}], 3, 0) === "Changes Requested");
+  check("no contract means nothing to approve", computeApprovalStatus(allApproved, false, null, 0, 0) === "Not Started");
+
+  // ---- Only the newest stage of the document is editable ----
+  //
+  // `versions` is built in stage order and carries only the stages that exist, so the
+  // last entry is the live one. Naming a stage instead left the previous one editable
+  // every time a new stage was added: executing the contract left the redline open.
+  const liveOf = (keys) => keys[keys.length - 1];
+  check("with only a draft, the draft is live", liveOf(["draft"]) === "draft");
+  check("once a redline exists the draft is superseded", liveOf(["draft", "redline"]) !== "draft");
+  check("and the redline is the live one", liveOf(["draft", "redline"]) === "redline");
+  check("once executed the redline is superseded too", liveOf(["draft", "redline", "executed"]) !== "redline",
+    "a signed contract must not leave the version behind it open for editing");
+  check("and an amendment supersedes the executed PDF",
+    liveOf(["draft", "redline", "executed", "amended"]) === "amended");
+
+  // ---- Findings belong to the version they were derived from ----
+  const mismatched = (derivedFor, viewing) => Boolean(derivedFor && viewing && derivedFor !== viewing);
+  check("findings read against the version they came from fit", !mismatched("v1.1", "v1.1"));
+  check("read against another version they do not", mismatched("v1.1", "v1.2"));
+  check("and going back to their own version settles it again", !mismatched("v1.1", "v1.1"),
+    "the prompt to re-derive comes and goes with the version on screen, without being dismissed");
+  check("nothing is claimed before a run has happened", !mismatched(null, "v1.1"));
+
+  const contractLive = computeContractStatus({
+    exists: true, envelopeStatus: "COMPLETED", aiChange: null, undecided: 0, blocked: 0,
+    redlineReceived: true, sentToSupplier: true, approvalStatus: "Approved", readyForSignature: true,
+    envelope: {}, anyReviewerActed: true,
+  });
+  check("an executed envelope makes the contract Active", contractLive === "Active");
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) {

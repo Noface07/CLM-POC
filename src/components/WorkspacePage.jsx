@@ -38,7 +38,7 @@ export default function WorkspacePage({
   // negotiation
   sentToSupplier, redlineReceived, onSendToSupplier, counterChanges = [], onSendCounter,
   counterRows = [], counterCleared = true, counterBlocked, onApproveCounter, canApproveCounter,
-  findingsStale,
+  findingsStale, findingsVersion, viewingVersion,
   aiChange, aiChangeLoading, runChangeIntelligence, changeRunMeta,
   exceptions, exceptionDecisions, assessFor, onOpenException, decide,
   changeTypeRoute, approvalMatrix, contractValue,
@@ -59,15 +59,33 @@ export default function WorkspacePage({
   // because that is the document edits target. You were editing something you could not
   // see. It is now readable, downloadable and closed to edits, and says which document
   // to make the change on.
-  const superseded = docVersion === "draft" && redlineReceived;
+  // Only the newest stage of the document is editable, and only while it is still Word.
+  //
+  // `versions` is built in stage order — draft, redline, executed, amended — and only
+  // carries the stages that exist, so its last entry is the live one. Keying off that
+  // rather than naming a stage means executing the contract closes the redline for the
+  // same reason a redline closes the draft, instead of leaving the previous stage open
+  // every time a new one is added.
+  const liveStage = versions.length ? versions[versions.length - 1].key : "draft";
+  const superseded = docVersion !== liveStage;
   const locked = frozen || superseded;
+  const STAGE_NAME = { draft: "the draft", redline: "the redline", executed: "the executed PDF", amended: "the amended contract" };
   const lockNote = frozen ? "signed, no longer editable"
-    : superseded ? "superseded by the redline: make changes there"
+    : superseded ? `superseded by ${STAGE_NAME[liveStage] || "a later version"}: make changes there`
     : "read-only for your role";
   const allReviewersApproved = Object.values(approvals).every((a) => a.status === "approved");
 
   // This panel is inside a contract, so it is that contract's trail. The estate-wide view
   // is the Audit trail tab, and the difference is stated rather than left to be noticed.
+  // Two different reasons the findings may not describe what is on screen: the document
+  // was edited after they were derived, or the reader has moved to another version. Both
+  // end the same way — re-derive — and both stop being true on their own, the second
+  // simply by going back to the version the findings are about.
+  const findingsElsewhere = Boolean(
+    aiChange && findingsVersion && viewingVersion && findingsVersion !== viewingVersion
+  );
+  const findingsMismatch = Boolean(findingsStale) || findingsElsewhere;
+
   const contractAudit = forContract(auditLog, contract.id);
   const estateCount = auditLog.length - contractAudit.length;
 
@@ -103,7 +121,9 @@ export default function WorkspacePage({
         </div>
       )}
 
-      {reviewInvalidated && !reviewComplete && (
+      {/* Keyed on whether the reviewers still owe an approval, not on whether the review
+          is complete: those stop being the same question the moment an exception exists. */}
+      {reviewInvalidated && !allReviewersApproved && (
         <div className="clm-readonly-banner" style={{ borderColor: "var(--color-accent-300)", background: "var(--color-accent-100)" }}>
           <RefreshCw size={15} />
           <span>
@@ -355,9 +375,17 @@ export default function WorkspacePage({
               <div className="clm-readonly-banner" style={{ marginTop: 0 }}>
                 <FileText size={15} />
                 <span>
-                  This is the draft as it was sent. {supplier.name} has since returned a redline, so this version is
-                  the record of what went out, not the document being negotiated. Switch to the redline to make a
-                  change.
+                  {liveStage === "executed" || liveStage === "amended" ? (
+                    <>
+                      This contract is executed. What you are reading is the negotiation record, not the agreement:
+                      the signed PDF is the contract, and no version behind it can be edited.
+                    </>
+                  ) : (
+                    <>
+                      This is the document as it stood at this version. It is the record of what went out, not what is
+                      being negotiated. Switch to {STAGE_NAME[liveStage] || "the current version"} to make a change.
+                    </>
+                  )}
                 </span>
               </div>
             )}
@@ -563,14 +591,24 @@ export default function WorkspacePage({
             )}
           </div>
 
-          {findingsStale && (
+          {findingsMismatch && (
             <div className="clm-readonly-banner" style={{ margin: 0, borderColor: "var(--color-accent-300)", background: "var(--color-accent-100)" }}>
               <RefreshCw size={15} />
               <span style={{ fontSize: 12.5 }}>
-                <strong>These findings are out of date.</strong> The document changed after they were derived, so
-                what is below was measured against wording that is no longer in it, and any clause you have just
-                written carries no band at all.
-                <span style={{ opacity: 0.65 }}> {findingsStale.reason} ({findingsStale.at}).</span>
+                {findingsStale ? (
+                  <>
+                    <strong>These findings are out of date.</strong> The document changed after they were derived, so
+                    what is below was measured against wording that is no longer in it, and any clause you have just
+                    written carries no band at all.
+                    <span style={{ opacity: 0.65 }}> {findingsStale.reason} ({findingsStale.at}).</span>
+                  </>
+                ) : (
+                  <>
+                    <strong>These findings are for {findingsVersion}, and you are reading {viewingVersion}.</strong>{" "}
+                    They describe the changes in {findingsVersion}, so read against this version they are answering a
+                    question you are not asking. Go back to {findingsVersion} and they fit again, or re-derive them here.
+                  </>
+                )}
                 {!readOnly && (
                   <Btn
                     small variant="secondary" icon={RefreshCw} spin={aiChangeLoading}

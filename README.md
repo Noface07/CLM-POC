@@ -7,7 +7,7 @@ playbook, sign it, and track the obligations that fall out of the signed PDF.
 ```bash
 npm install
 npm run dev           # http://localhost:5173
-npm run selftest      # 458 checks over the engines below
+npm run selftest      # 482 checks over the engines below
 npm run export:docx   # write the catalogue out as Word documents
 npm run lint
 ```
@@ -165,6 +165,13 @@ supplier who edited clause by clause returned a document still stamped with the 
 we sent them, and the version history had nothing to tell the redline apart from the
 draft it came from.
 
+**Only the newest stage of the document is editable**, and only while it is still Word.
+The stage list is built in order and carries only the stages that exist, so its last entry
+is the live one; keying off that rather than naming a stage means executing the contract
+closes the redline for the same reason a redline closes the draft. Every stage behind the
+live one stays readable and downloadable — it is the negotiation record — and says which
+document to make the change on.
+
 **The draft stops being editable once a redline exists.** It is still readable and still
 downloadable, because it is the record of what went out, but it is not the document being
 negotiated. It stayed open to edits, and an edit made while looking at it landed on the
@@ -193,6 +200,20 @@ people click through without reading.
 
 The approvals are cleared once the round is sent: they were approvals of those changes,
 and the next round's counters are approved on their own merits.
+
+**An invalidated internal review ends when the reviewers have looked again**, not when
+the approval status next reads Approved. Those stop being the same thing the moment a
+redline is back: the status turns to *Exception Approval Required* for a reason that has
+nothing to do with the reviewers, and a banner keyed on completeness reappears telling
+three people who have already approved to approve again. `src/lib/lifecycle.js` holds that
+distinction, and holds it where the selftest can reach it — the lifecycle state machine
+lived in `App.jsx`, so the most important logic in the product was the only logic with no
+tests, and a stale banner is what that cost.
+
+**Findings belong to the version they were derived from.** Read against any other version
+they are answering a question the reader is not asking, so the panel says which version
+they describe and offers to re-derive. It settles by itself on going back to that version:
+a prompt that has to be dismissed is a prompt that gets dismissed while still true.
 
 **Findings say when they are out of date.** They are derived from the tracked changes, so
 editing the redline dates them, and a clause you have just written carries no band until
@@ -410,9 +431,9 @@ catalogue/            agreement types, templates, clause playbook: the source of
 catalogue/docx/       the same, as Word documents (generated, see npm run export:docx)
 src/data/             imports the catalogue; template assembly; the contract portfolio
 src/lib/              zip, unzip, xml, docx, docx-import, pdf, redline, crossref,
-                      playbook, rbac, documenso, ai, audit, session, counter
+                      playbook, rbac, documenso, ai, audit, session, counter, lifecycle
 src/components/       the four tabs, the draft studio, the document viewer, the charts
-scripts/selftest.js   458 checks over all of the above
+scripts/selftest.js   482 checks over all of the above
 scripts/export-catalogue.js   writes catalogue/docx/
 ```
 
