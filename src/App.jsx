@@ -8,8 +8,8 @@ import {
   SUPPLIER, CLIENT_ENTITY, PORTFOLIO, REVIEWERS, CONTRACT_ID, CONTRACT_OWNER,
   DEFAULT_APPROVAL_MATRIX, routeMapFrom, escalationFrom, mustEscalate, formatMoney,
 } from "./data/contracts.js";
-import { AGREEMENT_TYPE_BY_CODE, TEMPLATE_BY_CODE } from "./data/catalogue.js";
-import { buildDraft } from "./data/templates.js";
+import { AGREEMENT_TYPE_BY_CODE, TEMPLATE_BY_CODE, CLAUSE_BY_CODE } from "./data/catalogue.js";
+import { buildDraft, resolvedClauseWording, docToPlainText } from "./data/templates.js";
 import { SALESFORCE_DEFAULTS, pushMilestone } from "./lib/salesforce.js";
 
 import {
@@ -19,7 +19,9 @@ import {
 } from "./lib/rbac.js";
 import {
   applyRedline, resolveChanges, deriveFindings, pendingChangeCount,
-  applySupplierRevision, SUPPLIER_REDLINE_EDITS, SUPPLIER_REVISION_EDITS,
+  applySupplierRevision, applyClauseEdit, insertClauseBlock, discardChange, settleAuthoredChanges,
+  markChangesSent, unsentChangesBy, deleteClauseBlock,
+  SUPPLIER_REDLINE_EDITS, SUPPLIER_REVISION_EDITS,
 } from "./lib/redline.js";
 import { buildReferenceGraph, contextFor, silentlyAffected } from "./lib/crossref.js";
 import { importDocx } from "./lib/docx-import.js";
@@ -170,10 +172,14 @@ export default function CLMApp() {
   const [draftRecord, setDraftRecord] = useState(() => restored("draftRecord", null));
   const [draftDoc, setDraftDoc] = useState(() => restored("draftDoc", null));
   const [redlineDoc, setRedlineDoc] = useState(() => restored("redlineDoc", null));
+  const [supplierDraft, setSupplierDraft] = useState(() => restored("supplierDraft", null));
+  const [docHistory, setDocHistory] = useState(() => restored("docHistory", []));
+  const [supplierAccepted, setSupplierAccepted] = useState(() => restored("supplierAccepted", null));
   const [changeDecisions, setChangeDecisions] = useState(() => restored("changeDecisions", {}));
   const [docVersion, setDocVersion] = useState(() => restored("docVersion", "v1.0"));
 
   const [approvals, setApprovals] = useState(() => restored("approvals", EMPTY_APPROVALS));
+  const [reviewInvalidated, setReviewInvalidated] = useState(() => restored("reviewInvalidated", null));
   const [reviewActionKey, setReviewActionKey] = useState(null);
   const [reviewCommentDraft, setReviewCommentDraft] = useState("");
 
@@ -296,7 +302,10 @@ export default function CLMApp() {
   const reviewComplete = approvalStatus === "Approved";
 
   const negotiated = Boolean(redlineDoc);
-  const readyForSignature = contractExists && sentToSupplier && (
+  // Our own edits to their redline that have not been put back to them yet.
+  const counterChanges = unsentChangesBy(redlineDoc, CLIENT_ENTITY.signatory);
+
+  const readyForSignature = contractExists && sentToSupplier && counterChanges.length === 0 && (
     negotiated
       ? Boolean(aiChange) && terminalCount === exceptions.length && pendingChanges === 0
       : reviewComplete
@@ -455,7 +464,7 @@ export default function CLMApp() {
   useEffect(() => {
     try {
       window.localStorage.setItem(PERSIST_KEY, JSON.stringify({
-        draftRecord, draftDoc, redlineDoc, changeDecisions, approvals, aiChange,
+        draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
         exceptionDecisions, envelope, aiObligations, validated, sentToSupplier,
         redlineReopened, declineReason, approvalMatrix, sfRecord, sfContext, sfMilestones, amendment,
         clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
@@ -464,7 +473,7 @@ export default function CLMApp() {
     } catch {
       // Storage blocked or full. The session will not survive a reload, which is acceptable.
     }
-  }, [draftRecord, draftDoc, redlineDoc, changeDecisions, approvals, aiChange,
+  }, [draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
       exceptionDecisions, envelope, aiObligations, validated, sentToSupplier,
       clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
       closureTasks, amendment]);
@@ -497,6 +506,19 @@ export default function CLMApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractStatus, sfRecord, draftRecord]);
 
+  // A version is kept at every exchange: the moments the document passes between the two
+  // sides. Those are the points somebody can be asked to compare, and without keeping
+  // them there is nothing to compare against, because the working document is rewritten
+  // in place each round.
+  function keepVersion(doc, label) {
+    if (!doc) return;
+    setDocHistory((history) => {
+      const last = history[history.length - 1];
+      if (last && docToPlainText(last.doc) === docToPlainText(doc)) return history;
+      return [...history, { key: `v1.${history.length}`, label, at: stampNow(), doc }];
+    });
+  }
+
   function flash(msg) { setNotice(msg); setTimeout(() => setNotice(""), 3600); }
   function logAudit(label) { setAuditLog((log) => [...log, { time: stampNow(), label }]); }
   async function syncToSalesforce(status, milestone) {
@@ -524,8 +546,11 @@ export default function CLMApp() {
 
   function resetDemo() {
     setPage("dashboard"); setCurrentRole("All Access (Demo Control)"); setPlaybook({ open: false, focus: null });
-    setDraftRecord(null); setDraftDoc(null); setRedlineDoc(null); setChangeDecisions({}); setDocVersion("v1.0");
-    setApprovals(EMPTY_APPROVALS); setReviewActionKey(null); setReviewCommentDraft("");
+    setDraftRecord(null); setDraftDoc(null); setRedlineDoc(null); setSupplierDraft(null); setDocHistory([]);
+    setSupplierAccepted(null);
+    setChangeDecisions({}); setDocVersion("v1.0");
+    setApprovals(EMPTY_APPROVALS); setReviewInvalidated(null);
+    setReviewActionKey(null); setReviewCommentDraft("");
     setSentToSupplier(false); setAiChange(null); setAiChangeLoading(false); setChangeRunMeta(null);
     setExceptionDecisions({}); setExceptionModalKey(null); setRevisionSubmitted({});
     setShowManualException(false); setManualExceptionDraft({ clause: "", materiality: "Medium", changeType: "Other", impact: "" });
@@ -571,6 +596,7 @@ export default function CLMApp() {
     const doc = buildDraft(templateCode, merged, { evergreen, version: "v1.0", status: "Draft" });
     setDraftRecord({ id, templateCode, agreementTypeCode, values: merged, evergreen });
     setDraftDoc(doc);
+    setDocHistory([{ key: "v1.0", label: "Draft assembled from the template", at: stampNow(), doc }]);
     setDocVersion("v1.0");
     setPage("workspace");
     const template = TEMPLATE_BY_CODE[templateCode];
@@ -580,24 +606,155 @@ export default function CLMApp() {
   }
 
   function sendToSupplier() {
+    // Our own authoring is settled into the text before the draft leaves. What the
+    // counterparty receives is a clean v1.0 stating our position, so the markup that
+    // comes back is theirs alone and reads as the words they changed.
+    const mine = (draftDoc?.changes || []).filter((c) => c.author === CLIENT_ENTITY.signatory);
+    if (mine.length) {
+      setDraftDoc((doc) => settleAuthoredChanges(
+        resolveChanges(doc, changeDecisions), CLIENT_ENTITY.signatory
+      ));
+      setChangeDecisions((prev) => {
+        const next = { ...prev };
+        for (const c of mine) delete next[c.id];
+        return next;
+      });
+      logAudit(`${mine.length} authored change${mine.length === 1 ? "" : "s"} settled into v1.0 before it was sent`);
+    }
     setSentToSupplier(true);
+    keepVersion(
+      mine.length ? settleAuthoredChanges(resolveChanges(draftDoc, changeDecisions), CLIENT_ENTITY.signatory) : draftDoc,
+      `Sent to ${SUPPLIER.name}`
+    );
     logAudit(`v1.0 sent to ${SUPPLIER.name} as a Word document for markup`);
     notify(SUPPLIER.name, `${draftRecord.id} draft shared for review`);
-    flash("Sent to supplier.");
+    flash(mine.length
+      ? `Sent to supplier. Your ${mine.length} change${mine.length === 1 ? "" : "s"} are now part of the draft.`
+      : "Sent to supplier.");
   }
 
-  function receiveRedline() {
-    if (!draftDoc) return;
-    const doc = applyRedline(draftDoc, SUPPLIER_REDLINE_EDITS, {
-      author: SUPPLIER.name, role: "Supplier", date: stampNow(),
-    });
+  // Sending our own markup back: the next round of the negotiation.
+  //
+  // Editing a returned redline is a counter-proposal, not a decision. It has to go back
+  // to the counterparty, because a change they have never seen cannot be something they
+  // agreed to, and the alternative was accepting our own edits and taking a document to
+  // signature that the other side never negotiated.
+  function sendCounterToSupplier() {
+    if (!redlineDoc || !counterChanges.length) return;
+    const counterDoc = markChangesSent(redlineDoc, CLIENT_ENTITY.signatory);
+    setRedlineDoc(counterDoc);
+    keepVersion(counterDoc, `Counter-proposal sent to ${SUPPLIER.name}`);
+    setRedlineReopened(true);
+    setSupplierDraft(null);
+    supersedeEnvelope("we returned a counter-proposal, so the signed text was superseded");
+    logAudit(
+      `${counterChanges.length} counter-proposal${counterChanges.length === 1 ? "" : "s"} sent back to `
+      + `${SUPPLIER.name} for a further round`
+    );
+    notify(SUPPLIER.name, `${draftRecord?.id}: counter-proposal returned, your markup is requested`);
+    flash(`Sent back to ${SUPPLIER.name}. They can mark it up again.`);
+  }
+
+  // The counterparty composes before they send.
+  //
+  // Marking a document up and returning it are two different acts, and collapsing them
+  // meant the scripted redline went straight to the client with no chance to add to it.
+  // The supplier now works on their own copy, which the client cannot see, and sends it
+  // when they are done.
+  const supplierWho = () => ({ author: SUPPLIER.name, role: "Supplier", date: stampNow() });
+
+  // A second round starts from the document as it stands, not from the original draft.
+  // Marking up the pristine draft again would throw away everything both sides settled
+  // in the first round.
+  const supplierBaseDoc = redlineReopened && redlineDoc ? redlineDoc : draftDoc;
+
+  function addScriptedChanges() {
+    if (!supplierBaseDoc) return;
+    const base = supplierDraft || supplierBaseDoc;
+    const doc = applyRedline(base, SUPPLIER_REDLINE_EDITS, supplierWho());
+    setSupplierDraft(doc);
+    logAudit(`${SUPPLIER.name} applied the scripted markup: ${doc.changes.length} tracked changes`);
+    flash("Scripted changes added to your copy. Edit further, then send it back.");
+  }
+
+  function supplierEditClause(clauseRef, proposed) {
+    const base = supplierDraft || supplierBaseDoc;
+    if (!base) return;
+    setSupplierDraft(applyClauseEdit(base, clauseRef, proposed, supplierWho()));
+    logAudit(`${SUPPLIER.name} edited clause ${clauseRef} on their working copy`);
+    flash(`Clause ${clauseRef} marked up. It is not with the client until you send it.`);
+  }
+
+  function supplierDeleteClause(clauseRef) {
+    const base = supplierDraft || supplierBaseDoc;
+    if (!base) return;
+    setSupplierDraft(deleteClauseBlock(base, clauseRef, supplierWho()));
+    logAudit(`${SUPPLIER.name} proposed striking clause ${clauseRef} out`);
+    flash(`Clause ${clauseRef} struck out on your copy. Send it back when you are done.`);
+  }
+
+  function supplierDiscardChange(id) {
+    if (!supplierDraft) return;
+    const change = supplierDraft.changes.find((c) => c.id === id);
+    setSupplierDraft(discardChange(supplierDraft, id));
+    logAudit(`${SUPPLIER.name} withdrew their change to clause ${change?.clauseRef || "?"}`);
+    flash("Change withdrawn from your copy.");
+  }
+
+  function supplierAddComment(anchor, text) {
+    if (!supplierDraft) return addComment(anchor, text, SUPPLIER.signatoryName, "Supplier");
+    setSupplierDraft((doc) => doc && ({
+      ...doc,
+      comments: [...(doc.comments || []), {
+        id: `cmt-local-${shortId()}`, anchor, author: SUPPLIER.signatoryName, role: "Supplier",
+        date: stampNow(), text, replies: [], resolved: false,
+      }],
+    }));
+    logAudit(`${SUPPLIER.signatoryName} commented on clause ${anchor} on their working copy`);
+  }
+
+  // Agreeing is an act, not the absence of one.
+  //
+  // A counterparty who is content with what they were sent had no way to say so: the
+  // only routes out of the portal were marking the document up or silence, and silence
+  // left our own counter-proposals sitting unagreed forever. Accepting records that they
+  // read it and agreed, and settles the proposals we had put to them.
+  function supplierAcceptAsSent() {
+    const at = stampNow();
+    const agreed = (redlineDoc?.changes || []).filter((c) => c.author === CLIENT_ENTITY.signatory && c.sent);
+    if (agreed.length) {
+      setChangeDecisions((d) => {
+        const next = { ...d };
+        for (const c of agreed) next[c.id] = "accepted";
+        return next;
+      });
+    }
+    setSupplierDraft(null);
+    setRedlineReopened(false);
+    setSupplierAccepted({ at, by: SUPPLIER.signatoryName, agreed: agreed.length });
+    logAudit(
+      `${SUPPLIER.name} accepted the document as sent without changes`
+      + (agreed.length ? `, agreeing ${agreed.length} of our proposals` : "")
+    );
+    notify(CONTRACT_OWNER, `${draftRecord?.id}: ${SUPPLIER.name} accepted the document as sent`);
+    flash("Accepted as sent. The client has been told.");
+  }
+
+  function sendSupplierRedline() {
+    const doc = supplierDraft;
+    if (!doc || !doc.changes.length) {
+      flash("Nothing to send yet: mark the document up first.");
+      return;
+    }
     supersedeEnvelope("the counterparty returned a further redline, so the signed text was superseded");
     setRedlineDoc(doc);
+    setSupplierDraft(null);
     setDocVersion("v1.1");
+    keepVersion(doc, `Redline returned by ${SUPPLIER.name}`);
     if (redlineReopened) { setAiChange(null); setChangeDecisions({}); setExceptionDecisions({}); setRedlineReopened(false); }
     logAudit(`Redline received from ${SUPPLIER.name}: ${doc.changes.length} tracked changes, ${doc.comments.length} comments`);
     notify(CONTRACT_OWNER, `${draftRecord.id}: supplier returned ${doc.changes.length} tracked changes`);
-    flash("Redline returned with tracked changes and comments.");
+    flash("Redline sent to the client.");
   }
 
   async function importRedline(file) {
@@ -617,21 +774,16 @@ export default function CLMApp() {
       meta: { ...imported.meta, version: "v1.1" },
       changes: imported.changes.map((c) => ({ ...c, date: c.date ? new Date(c.date).toLocaleString("en-GB") : stampNow() })),
     };
-    supersedeEnvelope("the counterparty returned a further redline, so the signed text was superseded");
-    setRedlineDoc(dated);
-    setDocVersion("v1.1");
-    setAiChange(null);
-    setChangeDecisions({});
-    setExceptionDecisions({});
-    setRedlineReopened(false);
+    // An upload lands on the counterparty's own copy, like the scripted markup does, so
+    // they can correct a mis-marked clause before the client ever sees it.
+    setSupplierDraft(dated);
 
     const authors = [...new Set(dated.changes.map((c) => c.author))];
     logAudit(
       `Supplier document imported (${file.name}) with ${dated.changes.length} tracked changes, `
       + `${dated.comments.length} comments, parsed from OOXML`
     );
-    notify(CONTRACT_OWNER, `${draftRecord?.id}: counterparty returned a marked-up document`);
-    flash(`Imported ${dated.changes.length} tracked changes from ${file.name}.`);
+    flash(`Read ${dated.changes.length} tracked changes from ${file.name}. Review, then send.`);
     return {
       clauses: dated.blocks.filter((b) => b.type === "clause").length,
       changes: dated.changes.length,
@@ -754,6 +906,93 @@ export default function CLMApp() {
     logAudit(`${author} commented on clause ${anchor}`);
   }
 
+  // Editing and clause insertion both land on whichever document is in front of the
+  // reviewer: the redline once one has come back, the draft before that.
+  function editActiveDoc(apply, audit) {
+    const target = redlineDoc ? setRedlineDoc : setDraftDoc;
+    target((doc) => (doc ? apply(doc) : doc));
+    setDocVersion(redlineDoc ? "v1.1" : "v1.0");
+    logAudit(audit);
+    if (!redlineDoc) invalidateReview(audit);
+  }
+
+  // An approval is given against a text, not against a contract.
+  //
+  // Once the draft changes, every approval already on it was given against wording that
+  // no longer exists, so the review starts again. Without this the workspace would offer
+  // "Send to supplier" on a document no reviewer has actually seen.
+  //
+  // Only the draft is governed this way. After a redline the gate is the exception
+  // matrix and the tracked changes, which have their own decisions to make.
+  function invalidateReview(because) {
+    if (!anyReviewerActed) return;
+    setApprovals(EMPTY_APPROVALS);
+    setReviewActionKey(null);
+    setReviewCommentDraft("");
+    setReviewInvalidated({ reason: because, at: stampNow() });
+    logAudit("Internal review reset: the draft changed after it was reviewed");
+    notify(CONTRACT_OWNER, `${draftRecord?.id || CONTRACT_ID}: draft edited after review, approvals reset`);
+  }
+
+  function editClause(clauseRef, proposed) {
+    const who = { author: CLIENT_ENTITY.signatory, role: currentRole, date: stampNow() };
+    editActiveDoc(
+      (doc) => applyClauseEdit(doc, clauseRef, proposed, who),
+      `${who.author} edited clause ${clauseRef} in place, recorded as a tracked change`
+    );
+    flash(`Clause ${clauseRef} updated. The edit is marked up for review.`);
+  }
+
+  function deleteClause(clauseRef) {
+    const who = { author: CLIENT_ENTITY.signatory, role: currentRole, date: stampNow() };
+    editActiveDoc(
+      (doc) => deleteClauseBlock(doc, clauseRef, who),
+      `${who.author} proposed striking clause ${clauseRef} out of the contract`
+    );
+    flash(`Clause ${clauseRef} struck out. It stays in the document until the deletion is decided.`);
+  }
+
+  function discardOwnChange(id) {
+    const doc = redlineDoc || draftDoc;
+    const change = (doc?.changes || []).find((c) => c.id === id);
+    editActiveDoc(
+      (d) => discardChange(d, id),
+      `${change?.author || "The author"} withdrew their change to clause ${change?.clauseRef || "?"}`
+    );
+    setChangeDecisions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    flash(`Change withdrawn. Clause ${change?.clauseRef || ""} is back as it was.`);
+  }
+
+  function insertPlaybookClause(code, afterRef) {
+    const clause = CLAUSE_BY_CODE[code];
+    if (!clause) return;
+    const doc = redlineDoc || draftDoc;
+
+    // Two liability caps in one contract is a drafting defect, not a negotiating position.
+    const already = (doc?.blocks || []).find((b) => b.playbookCode === code);
+    if (already) {
+      flash(`${clause.name} is already in this contract at clause ${already.ref}. Edit that clause instead.`);
+      return;
+    }
+
+    const who = { author: CLIENT_ENTITY.signatory, role: currentRole, date: stampNow() };
+    editActiveDoc(
+      (d) => insertClauseBlock(d, {
+        afterRef,
+        ref: clause.clauseRef,
+        heading: clause.name,
+        text: resolvedClauseWording(code, draftRecord?.values || {}, { evergreen: draftRecord?.evergreen }),
+        playbookCode: clause.code,
+      }, who),
+      `${clause.name} inserted from the playbook${afterRef ? ` after clause ${afterRef}` : ""} as a tracked insertion`
+    );
+    flash(`${clause.name} inserted as a tracked insertion.`);
+  }
+
   function updateComment(id, change) {
     const applies = (doc) => (doc?.comments || []).some((c) => c.id === id);
     const patch = (doc) => (doc && applies(doc)
@@ -824,6 +1063,7 @@ export default function CLMApp() {
 
   function resubmitForReview() {
     setApprovals(EMPTY_APPROVALS);
+    setReviewInvalidated(null);
     logAudit("Draft resubmitted for internal review after changes");
     flash("Resubmitted for internal review.");
   }
@@ -1247,9 +1487,17 @@ export default function CLMApp() {
                 onAddComment={addComment}
                 onReplyToComment={replyToComment}
                 onResolveComment={resolveComment}
+                onEditClause={editClause}
+                onInsertClause={insertPlaybookClause}
+                onDeleteClause={deleteClause}
+                onDiscardChange={discardOwnChange}
+                supplierAccepted={supplierAccepted}
+                currentAuthor={CLIENT_ENTITY.signatory}
                 versionHistory={versionHistory}
+                docHistory={docHistory}
                 reviewers={REVIEWERS}
                 approvals={approvals}
+                reviewInvalidated={reviewInvalidated}
                 reviewActionKey={reviewActionKey}
                 setReviewActionKey={setReviewActionKey}
                 reviewCommentDraft={reviewCommentDraft}
@@ -1262,6 +1510,8 @@ export default function CLMApp() {
                 sentToSupplier={sentToSupplier}
                 redlineReceived={Boolean(redlineDoc)}
                 onSendToSupplier={sendToSupplier}
+                counterChanges={counterChanges}
+                onSendCounter={sendCounterToSupplier}
                 aiChange={aiChange}
                 aiChangeLoading={aiChangeLoading}
                 runChangeIntelligence={runChangeIntelligence}
@@ -1444,7 +1694,15 @@ export default function CLMApp() {
                 draftDoc={draftDoc}
                 redlineDoc={resolvedRedline}
                 redlineReceived={Boolean(redlineDoc)}
-                onSubmitRedline={receiveRedline}
+                supplierDraft={supplierDraft}
+                supplierBaseDoc={supplierBaseDoc}
+                onAddScriptedChanges={addScriptedChanges}
+                onSendRedline={sendSupplierRedline}
+                onSupplierEditClause={supplierEditClause}
+                onSupplierDeleteClause={supplierDeleteClause}
+                onAcceptAsSent={supplierAcceptAsSent}
+                supplierAccepted={supplierAccepted}
+                onSupplierDiscardChange={supplierDiscardChange}
                 onImportRedline={importRedline}
                 accessLink={supplierAccessLink}
                 accessExpiry={supplierLinkExpiry}
@@ -1457,7 +1715,7 @@ export default function CLMApp() {
                 supplierSigned={supplierSigned}
                 onReplyToComment={(id, text) => replyToComment(id, text, SUPPLIER.signatoryName)}
                 onResolveComment={(id) => resolveComment(id, SUPPLIER.signatoryName)}
-                onAddComment={(anchor, text) => addComment(anchor, text, SUPPLIER.signatoryName, "Supplier")}
+                onAddComment={supplierAddComment}
                 onSupplierView={() => { setSupplierViewed(true); logAudit("Envelope viewed by supplier"); }}
                 onSupplierSign={() => setCeremony("supplier")}
                 waitingOnSigner={waitingOnSigner}

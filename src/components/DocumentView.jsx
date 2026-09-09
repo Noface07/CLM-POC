@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
-import { MessageSquare, Check, X, CornerDownRight } from "lucide-react";
+import { MessageSquare, Check, X, CornerDownRight, Pencil, Trash2, Scissors } from "lucide-react";
 import { Tag, Btn, GRAY, AMBER, GREEN, RED } from "../lib/ui.jsx";
+import { runsToText } from "../lib/redline.js";
+import { CLAUSE_DRAG_TYPE } from "./ClausePalette.jsx";
 
 function RunSpan({ run, decision }) {
   if (run.t === "ins") {
@@ -103,8 +105,14 @@ export default function DocumentView({
   onReply,
   onResolveComment,
   onAddComment,
+  onEditClause,
+  onDeleteClause,
+  onDropClause,
+  onDiscardChange,
+  currentAuthor,          // whoever is looking: they may withdraw their own changes
   canAct = true,          // may accept or reject tracked changes
   canComment = null,      // may reply to and resolve threads (defaults to canAct)
+  canEdit = false,        // may rewrite clause text, which lands as a tracked change
   height = 620,
   showComments = true,
   showFields = true,
@@ -113,7 +121,32 @@ export default function DocumentView({
   const mayComment = canComment == null ? canAct : canComment;
   const [commentOn, setCommentOn] = useState(null);
   const [commentDraft, setCommentDraft] = useState("");
+  const [editOn, setEditOn] = useState(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [dropOn, setDropOn] = useState(null);
   const paperRef = useRef(null);
+
+  function startEdit(block) {
+    setEditOn(block.ref);
+    setEditDraft(runsToText(block.runs));
+  }
+
+  // The id of my own still-undecided change on this clause, if there is one.
+  function myChangeOn(block) {
+    const ids = new Set((block.runs || []).map((r) => r.changeId).filter(Boolean));
+    if (block.insertedBy) ids.add(block.insertedBy);
+    const hit = (doc.changes || []).find((c) => ids.has(c.id)
+      && c.author === currentAuthor
+      && (!decisions[c.id] || decisions[c.id] === "pending"));
+    return hit?.id || null;
+  }
+
+  function commitEdit() {
+    const text = editDraft.trim();
+    if (text) onEditClause?.(editOn, text);
+    setEditOn(null);
+    setEditDraft("");
+  }
   const comments = doc.comments || [];
   const changeById = Object.fromEntries((doc.changes || []).map((c) => [c.id, c]));
 
@@ -128,12 +161,15 @@ export default function DocumentView({
     if (target) target.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
+  // The margin column is only worth reserving when something is going in it, otherwise
+  // the paper is squeezed by 300px of empty grey.
+  const hasMargin = showComments && comments.length > 0;
   const shellStyle = fill ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined;
   const columnStyle = fill ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined;
   const wrapStyle = fill ? { flex: 1, minHeight: 0 } : { maxHeight: height };
 
   return (
-    <div className="clm-doc-shell" style={shellStyle}>
+    <div className={`clm-doc-shell${hasMargin ? " has-margin" : ""}`} style={shellStyle}>
       <div style={columnStyle}>
       {changedRefs.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
@@ -165,7 +201,12 @@ export default function DocumentView({
           data-watermark={watermark || ""}
           style={watermark ? { backgroundImage: watermarkTile(watermark) } : undefined}
         >
-          {(doc.blocks || []).map((block, i) => {
+          {(doc.blocks || []).filter((block) => (
+            // An accepted deletion takes the paragraph off the page. Leaving the block in
+            // renders an empty numbered stub, because every run in it is a struck-out run
+            // that acceptance hides.
+            !(block.deletedBy && decisions[block.deletedBy] === "accepted")
+          )).map((block, i) => {
             if (block.type === "title") return <h1 key={i} className="clm-doc-title">{block.text}</h1>;
             if (block.type === "subtitle") return <p key={i} className="clm-doc-subtitle">{block.text}</p>;
             if (block.type === "signature") {
@@ -207,23 +248,95 @@ export default function DocumentView({
             const anchored = comments.filter((c) => c.anchor === block.ref);
             const pending = changeIds.filter((id) => !decisions[id] || decisions[id] === "pending");
 
+            const droppable = Boolean(onDropClause && canEdit && block.ref);
+
             return (
-              <div key={i} className="clm-doc-clause" id={block.ref ? `clause-${block.ref}` : undefined}>
-                <p className="clm-doc-para">
-                  {block.ref && <strong className="clm-doc-ref">{block.ref}{block.heading ? ` ${block.heading}` : ""}. </strong>}
-                  {runs.map((run, j) => (
-                    <RunSpan key={j} run={run} decision={run.changeId ? decisions[run.changeId] : undefined} />
-                  ))}
-                  {anchored.length > 0 && (
-                    <span className="clm-comment-marker" title={`${anchored.length} comment${anchored.length > 1 ? "s" : ""}`}>
-                      <MessageSquare size={11} />
-                    </span>
-                  )}
-                </p>
+              <div
+                key={i}
+                className={`clm-doc-clause${droppable ? " is-droppable" : ""}${dropOn === block.ref ? " is-drop-target" : ""}`}
+                id={block.ref ? `clause-${block.ref}` : undefined}
+                onDragOver={droppable ? (e) => {
+                  if (!e.dataTransfer.types.includes(CLAUSE_DRAG_TYPE)) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                  if (dropOn !== block.ref) setDropOn(block.ref);
+                } : undefined}
+                onDragLeave={droppable ? (e) => {
+                  if (e.currentTarget.contains(e.relatedTarget)) return;
+                  setDropOn((r) => (r === block.ref ? null : r));
+                } : undefined}
+                onDrop={droppable ? (e) => {
+                  const code = e.dataTransfer.getData(CLAUSE_DRAG_TYPE);
+                  setDropOn(null);
+                  if (!code) return;
+                  e.preventDefault();
+                  onDropClause(code, block.ref);
+                } : undefined}
+              >
+                {editOn === block.ref ? (
+                  <div className="clm-clause-editor">
+                    <div className="clm-clause-editor-head">
+                      <Pencil size={12} />
+                      Editing {block.ref}{block.heading ? ` ${block.heading}` : ""}
+                      <span className="clm-clause-editor-note">
+                        Saving records the difference as a tracked change, exactly as a Word edit would.
+                      </span>
+                    </div>
+                    <textarea
+                      className="input" value={editDraft} autoFocus
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") { setEditOn(null); setEditDraft(""); }
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) commitEdit();
+                      }}
+                      style={{ minHeight: 150, fontSize: 13, lineHeight: 1.6 }}
+                    />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <Btn small variant="primary" onClick={commitEdit}>Save as tracked change</Btn>
+                      <Btn small variant="ghost" onClick={() => { setEditOn(null); setEditDraft(""); }}>Cancel</Btn>
+                      {onDeleteClause && !block.deletedBy && (
+                        <Btn
+                          small variant="ghost" icon={Scissors}
+                          title="Propose striking this clause out of the contract"
+                          onClick={() => { onDeleteClause(block.ref); setEditOn(null); setEditDraft(""); }}
+                        >Delete clause</Btn>
+                      )}
+                      {onDiscardChange && myChangeOn(block) && (
+                        <Btn
+                          small variant="ghost" icon={Trash2}
+                          title="Withdraw the change on this clause and put it back as it was"
+                          onClick={() => { onDiscardChange(myChangeOn(block)); setEditOn(null); setEditDraft(""); }}
+                        >Discard my change</Btn>
+                      )}
+                      <span style={{ fontSize: 10.5, opacity: 0.45, marginLeft: "auto" }}>Ctrl+Enter saves · Esc cancels</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="clm-doc-para">
+                    {block.ref && <strong className="clm-doc-ref">{block.ref}{block.heading ? ` ${block.heading}` : ""}. </strong>}
+                    {runs.map((run, j) => (
+                      <RunSpan key={j} run={run} decision={run.changeId ? decisions[run.changeId] : undefined} />
+                    ))}
+                    {anchored.length > 0 && (
+                      <span className="clm-comment-marker" title={`${anchored.length} comment${anchored.length > 1 ? "s" : ""}`}>
+                        <MessageSquare size={11} />
+                      </span>
+                    )}
+                    {canEdit && onEditClause && block.ref && !block.deletedBy && (
+                      <button
+                        type="button" className="clm-clause-edit-btn"
+                        onClick={() => startEdit(block)}
+                        title={`Edit clause ${block.ref}`}
+                        aria-label={`Edit clause ${block.ref}`}
+                      ><Pencil size={11} /></button>
+                    )}
+                  </p>
+                )}
 
                 {changeIds.map((id) => {
                   const change = changeById[id];
                   const decision = decisions[id] || "pending";
+                  const mine = Boolean(currentAuthor && change?.author === currentAuthor);
                   return (
                     <div key={id} className="clm-change-bar">
                       <Tag
@@ -235,10 +348,21 @@ export default function DocumentView({
                       <span style={{ fontSize: 11, opacity: 0.6 }}>
                         {change?.author || "Counterparty"} · {change?.date || ""}
                       </span>
-                      {canAct && decision === "pending" && (
+                      {(canAct || mine) && decision === "pending" && (
                         <span style={{ display: "inline-flex", gap: 4, marginLeft: "auto" }}>
-                          <Btn small variant="secondary" icon={Check} onClick={() => onAccept?.(id)}>Accept</Btn>
-                          <Btn small variant="ghost" icon={X} onClick={() => onReject?.(id)}>Reject</Btn>
+                          {canAct && (
+                            <>
+                              <Btn small variant="secondary" icon={Check} onClick={() => onAccept?.(id)}>Accept</Btn>
+                              <Btn small variant="ghost" icon={X} onClick={() => onReject?.(id)}>Reject</Btn>
+                            </>
+                          )}
+                          {mine && onDiscardChange && (
+                            <Btn
+                              small variant="ghost" icon={Trash2}
+                              title="Withdraw this change and put the clause back as it was"
+                              onClick={() => onDiscardChange(id)}
+                            >Discard</Btn>
+                          )}
                         </span>
                       )}
                       {decision !== "pending" && canAct && (
@@ -263,11 +387,15 @@ export default function DocumentView({
                       </div>
                     </div>
                   ) : (
-                    pending.length > 0 || anchored.length > 0 ? (
-                      <div className="clm-change-bar" style={{ borderTop: "none", paddingTop: 0 }}>
-                        <Btn small variant="ghost" icon={MessageSquare} onClick={() => setCommentOn(block.ref)}>Comment</Btn>
-                      </div>
-                    ) : null
+                    <div
+                      className={`clm-change-bar clm-clause-actions${pending.length > 0 || anchored.length > 0 ? "" : " is-quiet"}`}
+                      style={{ borderTop: "none", paddingTop: 0 }}
+                    >
+                      <Btn small variant="ghost" icon={MessageSquare} onClick={() => setCommentOn(block.ref)}>Comment</Btn>
+                      {canEdit && onEditClause && editOn !== block.ref && !block.deletedBy && (
+                        <Btn small variant="ghost" icon={Pencil} onClick={() => startEdit(block)}>Edit</Btn>
+                      )}
+                    </div>
                   )
                 )}
               </div>

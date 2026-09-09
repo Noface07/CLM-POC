@@ -1,6 +1,12 @@
 import * as pdfjsLib from "pdfjs-dist";
-import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+// Vite builds and serves the worker itself, and we hand pdf.js the live port.
+//
+// Pointing workerSrc at a URL leaves pdf.js to construct the worker, and when that fails
+// it falls back to importing the same file dynamically. Under the dev server that import
+// picks up Vite's own `?import` suffix and 404s, which surfaces as "Setting up fake
+// worker failed" and takes PDF reading down with it. Handing over a port that Vite has
+// already resolved removes both the guesswork and the fallback.
+import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 
 import { downloadBlob } from "./zip.js";
 
@@ -27,14 +33,21 @@ async function textFromBytes(bytes) {
   // Relative to the deployed base, not the domain root: on GitHub Pages the app is
   // served from a subpath, and "/standard_fonts/" would look outside it.
   const standardFontDataUrl = `${import.meta.env.BASE_URL}standard_fonts/`;
-  const pdf = await pdfjsLib.getDocument({ data: bytes, standardFontDataUrl }).promise;
-  let fullText = "";
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-    fullText += content.items.map((item) => item.str).join(" ") + "\n";
+  const worker = new pdfjsLib.PDFWorker({ port: new PdfWorker() });
+  const task = pdfjsLib.getDocument({ data: bytes, worker, standardFontDataUrl });
+  try {
+    const pdf = await task.promise;
+    let fullText = "";
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      fullText += content.items.map((item) => item.str).join(" ") + "\n";
+    }
+    return fullText;
+  } finally {
+    await task.destroy();
+    worker.destroy();
   }
-  return fullText;
 }
 
 export async function extractPdfText(b64) {

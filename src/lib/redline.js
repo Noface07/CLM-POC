@@ -79,7 +79,11 @@ function coalesce(runs, meta) {
 let changeCounter = 0;
 
 export function applyRedline(doc, edits, who) {
-  const changes = [];
+  // Markup already on the document survives. Rebuilding the change list from scratch
+  // would leave the runs of an earlier round pointing at records that no longer exist:
+  // paragraphs still struck through and underlined, with nothing left to accept, reject
+  // or count. Only the clauses this pass actually rewrites lose their earlier record.
+  const changes = [...(doc.changes || [])];
   const comments = [...(doc.comments || [])];
 
   const blocks = doc.blocks.map((block) => {
@@ -93,6 +97,9 @@ export function applyRedline(doc, edits, who) {
     const edited = runs.some((r) => r.t === "ins" || r.t === "del");
 
     if (edited) {
+      for (let i = changes.length - 1; i >= 0; i--) {
+        if (changes[i].clauseRef === block.ref) changes.splice(i, 1);
+      }
       changes.push({
         id: changeId,
         clauseRef: block.ref,
@@ -138,6 +145,259 @@ function bumpVersion(version) {
   return `v${match[1]}.${Number(match[2]) + 1}`;
 }
 
+// Editing a clause in place.
+//
+// The diff is taken from the clause's ORIGINAL text, not from what is on screen, so a
+// second edit to the same clause reads as one revision from the agreed wording rather
+// than as a revision of somebody else's markup. That is also why the previous change on
+// the clause is replaced: one clause carries one open proposal, which is the thing a
+// reviewer decides on.
+export function applyClauseEdit(doc, clauseRef, proposed, who) {
+  const changeId = `chg-${++changeCounter}`;
+  let applied = false;
+  let inserted = false;
+  let previous = "";
+  let heading;
+  let playbookCode;
+
+  const blocks = doc.blocks.map((block) => {
+    if (block.ref !== clauseRef) return block;
+    heading = block.heading;
+    playbookCode = block.playbookCode;
+
+    // A clause that exists only because somebody added it has no agreed wording behind
+    // it, so revising it keeps it a single insertion of the new text. Diffing it against
+    // its own draft would show three words changing inside a paragraph the other side
+    // has never seen.
+    if (block.insertedBy) {
+      inserted = true;
+      applied = true;
+      previous = "";
+      return {
+        ...block,
+        insertedBy: changeId,
+        runs: [{ t: "ins", text: proposed, author: who.author, date: who.date, changeId }],
+      };
+    }
+
+    previous = runsToOriginalText(block.runs);
+    const runs = diffToRuns(previous, proposed, { author: who.author, date: who.date, changeId });
+    applied = runs.some((r) => r.t === "ins" || r.t === "del");
+    return applied ? { ...block, runs } : { ...block, runs: [{ t: "text", text: previous }] };
+  });
+
+  const prior = (doc.changes || []).find((c) => c.clauseRef === clauseRef);
+  const changes = (doc.changes || []).filter((c) => c.clauseRef !== clauseRef);
+  if (applied) {
+    changes.push({
+      id: changeId,
+      clauseRef,
+      clauseHeading: heading || prior?.clauseHeading,
+      playbookCode: playbookCode || prior?.playbookCode,
+      author: who.author,
+      authorRole: who.role,
+      date: who.date,
+      previous,
+      proposed,
+      status: "pending",
+      authored: true,
+      inserted: inserted || undefined,
+    });
+  }
+
+  return { ...doc, blocks, changes };
+}
+
+// Striking a clause out entirely.
+//
+// Deleting a clause is an ordinary negotiating move and has to be proposed like any
+// other: the whole paragraph is struck through, and it survives in the document until
+// somebody decides it. `deletedBy` marks the block as owing its removal to that change,
+// which is what lets an accepted deletion take the paragraph with it and a rejected one
+// put it back untouched.
+export function deleteClauseBlock(doc, clauseRef, who) {
+  const changeId = `chg-${++changeCounter}`;
+  let applied = false;
+  let previous = "";
+  let heading;
+  let playbookCode;
+
+  const blocks = doc.blocks.map((block) => {
+    if (block.ref !== clauseRef) return block;
+    heading = block.heading;
+    playbookCode = block.playbookCode;
+    previous = runsToText(block.runs);
+    if (!previous.trim()) return block;
+    applied = true;
+    return {
+      ...block,
+      deletedBy: changeId,
+      insertedBy: undefined,
+      runs: [{ t: "del", text: previous, author: who.author, date: who.date, changeId }],
+    };
+  });
+
+  if (!applied) return doc;
+
+  const prior = (doc.changes || []).find((c) => c.clauseRef === clauseRef);
+  const changes = (doc.changes || []).filter((c) => c.clauseRef !== clauseRef);
+  changes.push({
+    id: changeId,
+    clauseRef,
+    clauseHeading: heading || prior?.clauseHeading,
+    playbookCode: playbookCode || prior?.playbookCode,
+    author: who.author,
+    authorRole: who.role,
+    date: who.date,
+    previous,
+    proposed: "",
+    status: "pending",
+    authored: true,
+    deleted: true,
+  });
+
+  return { ...doc, blocks, changes };
+}
+
+// Settling your own markup into the text before the document leaves the building.
+//
+// You do not send your own tracked changes to the counterparty. Authoring a clause and
+// negotiating one are different acts: what goes out is a clean draft that reads as the
+// position you are taking, and the markup that comes back is theirs alone.
+//
+// This is also what makes their redline legible. A clause still carried as an insertion
+// has no original text to diff against, so the next person to touch it re-inserts the
+// whole paragraph instead of changing three words in it.
+export function settleAuthoredChanges(doc, author) {
+  const mine = (doc.changes || []).filter((c) => c.author === author);
+  if (!mine.length) return doc;
+
+  const ids = new Set(mine.map((c) => c.id));
+  const blocks = doc.blocks.filter((b) => !(b.deletedBy && ids.has(b.deletedBy))).map((block) => {
+    if (!(block.runs || []).some((r) => ids.has(r.changeId))) return block;
+    const runs = [];
+    for (const run of block.runs) {
+      if (!ids.has(run.changeId)) { runs.push(run); continue; }
+      if (run.t === "del") continue;
+      if (run.t === "ins") { runs.push({ t: "text", text: run.text }); continue; }
+      runs.push(run);
+    }
+    const settled = { ...block, runs: mergeAdjacentText(runs) };
+    if (block.insertedBy && ids.has(block.insertedBy)) delete settled.insertedBy;
+    return settled;
+  });
+
+  return { ...doc, blocks, changes: (doc.changes || []).filter((c) => !ids.has(c.id)) };
+}
+
+// Marks an author's proposals as having been put to the other side.
+//
+// A change you made and a change they have seen are different things. Until it has gone
+// back, your markup is a private counter-proposal, and nothing that has not been put to
+// the counterparty should be capable of reaching signature.
+export function markChangesSent(doc, author) {
+  return {
+    ...doc,
+    changes: (doc.changes || []).map((c) => (c.author === author && !c.sent ? { ...c, sent: true } : c)),
+  };
+}
+
+export function unsentChangesBy(doc, author) {
+  return (doc?.changes || []).filter((c) => c.author === author && !c.sent);
+}
+
+// Whose markup is sitting on this clause, if anybody's.
+export function pendingAuthorOn(doc, clauseRef, decisions = {}) {
+  const block = (doc.blocks || []).find((b) => b.ref === clauseRef);
+  if (!block) return null;
+  const ids = new Set((block.runs || []).map((r) => r.changeId).filter(Boolean));
+  if (block.insertedBy) ids.add(block.insertedBy);
+  const open = (doc.changes || []).find((c) => ids.has(c.id)
+    && (!decisions[c.id] || decisions[c.id] === "pending"));
+  return open ? open.author : null;
+}
+
+// Withdrawing a change you made yourself.
+//
+// This is not accept/reject. Rejecting is a decision ABOUT a proposal and leaves the
+// proposal on the record; discarding says the proposal should never have been made, so
+// the clause returns to its original wording and the change record goes with it. An
+// inserted clause loses the whole paragraph, because that paragraph was the change.
+export function discardChange(doc, changeId) {
+  const blocks = doc.blocks
+    .filter((block) => block.insertedBy !== changeId)
+    .map((block) => {
+      if (!(block.runs || []).some((r) => r.changeId === changeId)) return block;
+      const runs = [];
+      for (const run of block.runs) {
+        if (run.changeId !== changeId) { runs.push(run); continue; }
+        if (run.t === "ins") continue;
+        if (run.t === "del") { runs.push({ t: "text", text: run.text }); continue; }
+        runs.push(run);
+      }
+      const restored = { ...block, runs: mergeAdjacentText(runs) };
+      if (block.deletedBy === changeId) delete restored.deletedBy;
+      return restored;
+    });
+
+  return {
+    ...doc,
+    blocks,
+    changes: (doc.changes || []).filter((c) => c.id !== changeId),
+  };
+}
+
+// Dropping a playbook clause into the document.
+//
+// The whole paragraph arrives as a tracked insertion, so it is decided on the same terms
+// as anything the counterparty proposed. `insertedBy` marks the block as owing its whole
+// existence to that change, which is what lets a rejection remove the paragraph rather
+// than leave an empty one behind.
+export function insertClauseBlock(doc, { afterRef, ref, heading, text, playbookCode }, who) {
+  const changeId = `chg-${++changeCounter}`;
+  const taken = new Set((doc.blocks || []).map((b) => b.ref).filter(Boolean));
+
+  let finalRef = ref || "";
+  if (!finalRef || taken.has(finalRef)) {
+    const base = finalRef || afterRef || "new";
+    let suffix = "A";
+    while (taken.has(`${base}${suffix}`)) suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
+    finalRef = `${base}${suffix}`;
+  }
+
+  const block = {
+    type: "clause",
+    ref: finalRef,
+    heading,
+    playbookCode,
+    insertedBy: changeId,
+    runs: [{ t: "ins", text, author: who.author, date: who.date, changeId }],
+  };
+
+  const blocks = [...(doc.blocks || [])];
+  const at = afterRef ? blocks.findIndex((b) => b.ref === afterRef) : -1;
+  blocks.splice(at === -1 ? blocks.length : at + 1, 0, block);
+
+  return {
+    ...doc,
+    blocks,
+    changes: [...(doc.changes || []), {
+      id: changeId,
+      clauseRef: finalRef,
+      clauseHeading: heading,
+      playbookCode,
+      author: who.author,
+      authorRole: who.role,
+      date: who.date,
+      previous: "",
+      proposed: text,
+      status: "pending",
+      authored: true,
+      inserted: true,
+    }],
+  };
+}
+
 export function runsToText(runs) {
   return (runs || [])
     .filter((r) => r.t !== "del")
@@ -153,7 +413,13 @@ export function runsToOriginalText(runs) {
 }
 
 export function resolveChanges(doc, decisions) {
-  const blocks = doc.blocks.map((block) => {
+  const blocks = doc.blocks.filter((block) => {
+    // A clause that exists only because it was dropped in leaves nothing behind when the
+    // insertion is rejected, rather than an empty numbered paragraph.
+    if (block.deletedBy && decisions[block.deletedBy] === "accepted") return false;
+    if (!block.insertedBy) return true;
+    return decisions[block.insertedBy] !== "rejected";
+  }).map((block) => {
     if (!(block.runs || []).some((r) => r.changeId)) return block;
     const runs = [];
     for (const run of block.runs) {
@@ -169,7 +435,13 @@ export function resolveChanges(doc, decisions) {
       }
       runs.push(run);
     }
-    return { ...block, runs: mergeAdjacentText(runs) };
+    const resolved = { ...block, runs: mergeAdjacentText(runs) };
+    // Once an insertion is accepted the paragraph is simply part of the contract, so it
+    // stops being "new". Leaving the mark on would make the next edit to it re-insert
+    // the whole thing instead of marking up the words that changed.
+    if (block.insertedBy && decisions[block.insertedBy] === "accepted") delete resolved.insertedBy;
+    if (block.deletedBy && decisions[block.deletedBy] === "rejected") delete resolved.deletedBy;
+    return resolved;
   });
 
   const changes = (doc.changes || []).map((c) => ({ ...c, status: decisions[c.id] || c.status }));

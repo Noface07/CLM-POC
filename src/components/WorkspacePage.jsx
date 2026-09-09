@@ -8,6 +8,9 @@ import {
 } from "../lib/ui.jsx";
 import LifecycleBar from "./LifecycleBar.jsx";
 import DocumentView, { ChangeSummary } from "./DocumentView.jsx";
+import ClausePalette from "./ClausePalette.jsx";
+import CompareVersions from "./CompareVersions.jsx";
+import Fold from "./Fold.jsx";
 import Finding from "./Finding.jsx";
 import { downloadDocx } from "../lib/docx.js";
 import { formatMoney, mustEscalate } from "../data/contracts.js";
@@ -24,13 +27,14 @@ export default function WorkspacePage({
   // document
   activeDoc, docVersion, setDocVersion, versions, watermark, changeDecisions,
   onAcceptChange, onRejectChange, onAddComment, onReplyToComment, onResolveComment,
-  versionHistory,
+  onEditClause, onInsertClause, onDeleteClause, onDiscardChange, currentAuthor, versionHistory, docHistory,
+  supplierAccepted,
   // review
-  reviewers, approvals, reviewActionKey, setReviewActionKey, reviewCommentDraft,
+  reviewers, approvals, reviewInvalidated, reviewActionKey, setReviewActionKey, reviewCommentDraft,
   setReviewCommentDraft, submitReviewDecision, resolveDelegation, roleCanActOnReviewer,
   resubmitForReview, reviewComplete,
   // negotiation
-  sentToSupplier, redlineReceived, onSendToSupplier,
+  sentToSupplier, redlineReceived, onSendToSupplier, counterChanges = [], onSendCounter,
   aiChange, aiChangeLoading, runChangeIntelligence, changeRunMeta,
   exceptions, exceptionDecisions, assessFor, onOpenException, decide,
   changeTypeRoute, approvalMatrix, contractValue,
@@ -80,6 +84,17 @@ export default function WorkspacePage({
         </div>
       )}
 
+      {reviewInvalidated && !reviewComplete && (
+        <div className="clm-readonly-banner" style={{ borderColor: "var(--color-accent-300)", background: "var(--color-accent-100)" }}>
+          <RefreshCw size={15} />
+          <span>
+            <strong>Internal review restarted.</strong> The draft was edited after it was approved, so every approval
+            was given against wording that no longer exists. Reviewers need to see it again before it goes out.
+            <span style={{ opacity: 0.6 }}> Last change: {reviewInvalidated.at}.</span>
+          </span>
+        </div>
+      )}
+
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: "var(--space-6)" }}>
         {!allReviewersApproved && !["Rejected", "Changes Requested"].includes(approvalStatus) && (
           <p style={{ margin: 0, fontSize: 13.5, opacity: 0.75 }}>Internal review pending. Approve or decide below.</p>
@@ -117,6 +132,28 @@ export default function WorkspacePage({
           <p style={{ margin: 0, fontSize: 13.5, opacity: 0.75 }}>
             {blockedCount} exception{blockedCount > 1 ? "s" : ""} still open, awaiting a supplier revision or an escalation decision.
           </p>
+        )}
+        {supplierAccepted && (
+          <p style={{ margin: 0, fontSize: 13.5, opacity: 0.75 }}>
+            {supplier.name} accepted the document as sent on {supplierAccepted.at}, without changes
+            {supplierAccepted.agreed > 0
+              ? `, which agrees the ${supplierAccepted.agreed} proposal${supplierAccepted.agreed === 1 ? "" : "s"} you put to them.`
+              : "."}
+          </p>
+        )}
+        {counterChanges.length > 0 && (
+          <>
+            <p style={{ margin: 0, fontSize: 13.5, color: "var(--color-accent-700)" }}>
+              You have changed {counterChanges.length === 1 ? "a clause" : `${counterChanges.length} clauses`} on
+              their redline. That is a counter-proposal, not a decision, so it goes back to {supplier.name} for
+              another round. Nothing they have not seen can reach signature.
+            </p>
+            {!readOnly && (
+              <Btn onClick={onSendCounter} icon={Send} variant="primary">
+                Send back to {supplier.name}
+              </Btn>
+            )}
+          </>
         )}
         {aiChange && readyForSignature && pendingChanges > 0 && (
           <p style={{ margin: 0, fontSize: 13.5, color: "var(--color-accent-700)" }}>
@@ -171,8 +208,11 @@ export default function WorkspacePage({
 
       <div className="clm-workspace-grid">
         <div style={{ display: "grid", gap: "var(--space-4)" }}>
-          <div className="card">
-            <div className="card-title" style={{ marginBottom: 4 }}>Contract details</div>
+          <Fold
+            title="Contract details"
+            note={`${formatMoney(contract.value, contract.currency)} · ${contract.category}`}
+            right={<Tag c={contract.riskLevel === "high" ? RED : contract.riskLevel === "medium" ? AMBER : GREEN}>{contract.riskLevel} risk</Tag>}
+          >
             <div className="clm-grid-2" style={{ gap: "var(--space-4) var(--space-6)" }}>
               <div><div style={kicker}>Legal entity</div><div style={{ fontSize: 14 }}>{clientEntity.name}</div></div>
               <div><div style={kicker}>Contract owner</div><div style={{ fontSize: 14 }}>{contract.owner}</div></div>
@@ -209,7 +249,7 @@ export default function WorkspacePage({
                 termination notice, which is why the playbook holds the notice period rather than the term length here.
               </p>
             )}
-          </div>
+          </Fold>
 
           <div className="card">
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
@@ -253,24 +293,41 @@ export default function WorkspacePage({
               </div>
             )}
 
+            {activeDoc && (
+              <ClausePalette
+                onOpenPlaybook={onOpenPlaybook}
+                onInsert={(code) => onInsertClause?.(code)}
+                presentIn={activeDoc}
+                disabled={readOnly || frozen}
+                disabledNote={frozen ? "signed, no longer editable" : "read-only for your role"}
+              />
+            )}
+
             {activeDoc ? (
               <DocumentView
                 doc={activeDoc}
                 watermark={watermark}
                 decisions={changeDecisions}
                 canAct={!readOnly && !frozen}
+                canEdit={!readOnly && !frozen}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onAddComment={onAddComment}
                 onReply={onReplyToComment}
                 onResolveComment={onResolveComment}
+                onEditClause={onEditClause}
+                onDeleteClause={onDeleteClause}
+                onDropClause={onInsertClause}
+                onDiscardChange={onDiscardChange}
+                currentAuthor={currentAuthor}
                 height={560}
               />
             ) : (
               <p style={{ fontSize: 13, opacity: 0.6, margin: 0 }}>No document on this version yet.</p>
             )}
+          </div>
 
-            <div className="card-title" style={{ fontSize: 13, marginTop: "var(--space-4)", marginBottom: 2 }}>Version history</div>
+          <Fold title="Version history" note={`${versionHistory.length} entries`} defaultOpen={false}>
             <div style={{ display: "grid" }}>
               {versionHistory.map((r, i) => (
                 <div key={i} style={{ display: "flex", gap: "var(--space-3)", padding: "var(--space-2) 0",
@@ -281,11 +338,13 @@ export default function WorkspacePage({
                 </div>
               ))}
             </div>
-          </div>
+          </Fold>
 
           {!reviewComplete && !["Rejected", "Changes Requested"].includes(approvalStatus) && (
-            <div className="card">
-              <div className="card-title" style={{ marginBottom: 4 }}>Internal review</div>
+            <Fold
+              title="Internal review"
+              note={`${Object.values(approvals).filter((a) => a.status === "approved").length} of ${reviewers.length} approved`}
+            >
               <p style={{ fontSize: 11.5, opacity: 0.5, margin: "0 0 8px" }}>
                 Each reviewer can Approve, Reject, Request Changes, or Delegate, with a comment.
               </p>
@@ -348,14 +407,13 @@ export default function WorkspacePage({
                   </div>
                 );
               })}
-            </div>
+            </Fold>
           )}
 
           {lifecycle}
 
           {auditLog.length > 0 && (
-            <div className="card">
-              <div className="card-title" style={{ marginBottom: 4 }}>Audit trail</div>
+            <Fold title="Audit trail" note={`${auditLog.length} events`} defaultOpen={false}>
               <p style={{ fontSize: 11.5, opacity: 0.5, margin: "0 0 8px" }}>
                 Every approval, tracked-change decision, exception decision and signature event, timestamped.
               </p>
@@ -367,9 +425,12 @@ export default function WorkspacePage({
                   </div>
                 ))}
               </div>
-            </div>
+            </Fold>
           )}
         </div>
+
+        <div style={{ display: "grid", gap: "var(--space-4)", alignContent: "start" }}>
+        <CompareVersions history={docHistory} />
 
         <div className="card clm-ai-panel" style={{ border: "1px dashed var(--color-accent-300)", gap: "var(--space-3)" }}>
           <div className="clm-ai-head">
@@ -462,6 +523,7 @@ export default function WorkspacePage({
               )}
             </div>
           )}
+        </div>
         </div>
       </div>
     </>
