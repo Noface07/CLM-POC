@@ -323,9 +323,19 @@ prove the integration against an org you own. In production the call and the cre
 on a server (§10), and moving the secret out of the picture is not the same as moving the token.
 
 In dev, `vite.config.js` proxies `/salesforce` to the org, so the token endpoint and the data
-API share one route and the browser's cross-origin rules never apply. From a deployed origin
-there is no proxy: allowlist the origin under *Setup → CORS*, set the panel's Instance URL to
-the real org, and add the deployed address to the connected app's callback list.
+API share one route and the browser's cross-origin rules never apply. A production build has no
+proxy in front of it, so `instanceUrl` resolves to the org itself and three things have to be
+true of the deployment:
+
+1. **The build knows the org.** `.env` is gitignored, so CI reads `VITE_SALESFORCE_URL` and
+   `VITE_SF_CLIENT_ID` from the repository's Actions **variables** (Settings → Secrets and
+   variables → Actions → Variables). Variables rather than secrets, because neither is one.
+   Leave them unset and the deployed demo runs in simulated mode with a session-token field —
+   which is what "why is there no auth on the live site" looks like.
+2. **The org allows the origin.** `salesforce/…/corsWhitelistOrigins/` allowlists
+   `https://noface07.github.io` and `http://localhost:5173`; it deploys with the rest.
+3. **The connected app knows the callback.** `https://noface07.github.io/CLM-POC/` is already
+   in its list.
 
 `docs/salesforce-round-trip.html` is the command-line setup guide; `docs/salesforce-by-hand.html`
 is the same org built by clicking, for an org where the CLI is not an option.
