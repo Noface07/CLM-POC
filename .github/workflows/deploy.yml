@@ -31,7 +31,16 @@ jobs:
 
       - run: npm run selftest
 
+      # The Salesforce org and the Connected App's consumer key are baked into the bundle
+      # at build time (Vite's VITE_ variables). .env is gitignored, so CI reads them from
+      # the repository's Actions variables instead: Settings → Secrets and variables →
+      # Actions → Variables. Neither is a secret — the key belongs to a PKCE public
+      # client — which is why they are variables rather than secrets and may appear in
+      # logs. Leave them unset and the deployed demo runs in simulated mode.
       - run: npm run build
+        env:
+          VITE_SALESFORCE_URL: ${{ vars.VITE_SALESFORCE_URL }}
+          VITE_SF_CLIENT_ID: ${{ vars.VITE_SF_CLIENT_ID }}
 
       - uses: actions/configure-pages@v5
 

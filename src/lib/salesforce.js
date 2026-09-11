@@ -10,7 +10,12 @@ export const SALESFORCE_DEFAULTS = {
   // Live when an org is configured. Simulated is the fallback for a machine with no .env,
   // not the thing the page is for.
   mode: ENV.VITE_SF_CLIENT_ID || ENV.VITE_SALESFORCE_URL ? "live" : "simulated",
-  instanceUrl: "/salesforce",
+  // Where API calls go. In development that is the Vite proxy path, which forwards to
+  // the org and keeps the browser's cross-origin rules out of it. A deployed build has no
+  // Vite in front of it, so the calls go to the org directly — which needs the site's
+  // origin on the org's CORS allowlist (Setup → CORS), and is why a production build with
+  // "/salesforce" here 404s against the static host rather than reaching Salesforce.
+  instanceUrl: ENV.DEV ? "/salesforce" : (ENV.VITE_SALESFORCE_URL || "/salesforce"),
   // "token": a session id pasted into the panel. "oauth": signed in through the org, with
   // a refresh token, so a 401 is handled rather than seen.
   authMode: ENV.VITE_SF_CLIENT_ID ? "oauth" : "token",
