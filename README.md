@@ -265,6 +265,71 @@ contract out of the runway chart into its own count on the dashboard. The playbo
 `term_renewal.evergreenPosition` holds the position: what makes an evergreen contract safe is the
 termination notice, so that is the term to defend.
 
+## Salesforce: where a contract starts and where it ends
+
+The blueprint's process begins in Salesforce (§6.1: onboarding reaches *Ready to Contract*,
+the user clicks **Create Contract**, the CLM opens with the supplier's context) and ends there
+(§6.10: status, version and **PO eligibility** written back). `src/lib/salesforce.js` speaks the
+real REST API; `salesforce/` holds everything the org needs, as metadata, so a fresh org is
+four commands rather than an afternoon in Object Manager.
+
+```bash
+cd salesforce
+sf org login web --alias clmdemo --set-default
+sf project deploy start --source-dir force-app --target-org clmdemo
+sf org assign permset --name CLM_Integration --target-org clmdemo
+sf apex run --file scripts/seed-demo-data.apex --target-org clmdemo
+```
+
+**Three objects, each with a different lifetime.** `Account` is the supplier master.
+`Supplier_Onboarding__c` is one qualification journey: the four prerequisite checkboxes, service
+category, site, anticipated value, and the **Create Contract** formula field, which renders a
+link only when every prerequisite is met and *"Onboarding incomplete"* otherwise. `CLM_Contract__c`
+is what the CLM writes back, with lookups to both. The blueprint (§14) lists the object model as
+still to be validated, which is why the object name is a setting on the panel rather than code.
+
+**The nested shape stops at the boundary.** SOQL reaches the supplier through `Account__r`, and
+`flattenOnboarding()` collapses that into the flat shape `SIM_ORG` defines, so nothing downstream
+learns which object onboarding lives on. Two ids survive because they answer different questions:
+`Id` is the journey status is written back to, `AccountId` is the supplier a contract belongs to.
+
+**The gate is re-run on arrival.** The formula field offered the link because the prerequisites
+passed when Salesforce last drew the page. A checkbox can be unticked between that render and
+the click, and a URL can be pasted from anywhere, so the CLM decides again for itself. That is the
+difference between a gate and a suggestion.
+
+**The writeback is an upsert by external id.** `PATCH /sobjects/CLM_Contract__c/Contract_Reference__c/<id>`
+creates on the first call and updates on every one after, so the sync effect firing twice after a
+reload duplicates nothing. `PO_Eligibility__c` is true only at Executed or Active — a control, not
+a mirror of the status, and the one field procurement actually reads.
+
+### Signing in
+
+Two ways, chosen on the panel. **Paste a session token**: quick, expires with the session, and
+the CLM reports a 401 when it does. **Sign in with Salesforce**: OAuth 2.0 authorization code
+with PKCE, as a public client, through the `FM_CLM_Demo` connected app in `salesforce/`. It
+returns a refresh token, so a 401 is something `sfFetch` handles — refresh once, retry once —
+rather than something anyone sees. The connection survives a reload and comes back live on the
+next visit; **Disconnect** revokes the refresh token at the org.
+
+Both values the flow needs come from `.env` (see `.env.example`): the org's My Domain, which is
+where the browser is sent to sign in and therefore cannot go through the proxy, and the
+connected app's consumer key. Neither is a secret. PKCE is the design for a client that cannot
+keep one, and a browser cannot.
+
+**What OAuth does not change**, stated on the panel and worth saying out loud in a demo: the
+access token still lives in the browser, readable by anything on the page. This is enough to
+prove the integration against an org you own. In production the call and the credential belong
+on a server (§10), and moving the secret out of the picture is not the same as moving the token.
+
+In dev, `vite.config.js` proxies `/salesforce` to the org, so the token endpoint and the data
+API share one route and the browser's cross-origin rules never apply. From a deployed origin
+there is no proxy: allowlist the origin under *Setup → CORS*, set the panel's Instance URL to
+the real org, and add the deployed address to the connected app's callback list.
+
+`docs/salesforce-round-trip.html` is the command-line setup guide; `docs/salesforce-by-hand.html`
+is the same org built by clicking, for an org where the CLI is not an option.
+
 ## E-signature: Documenso
 
 `src/lib/documenso.js` talks to the real Documenso v2 API: `/envelope/create` (multipart),
@@ -416,7 +481,26 @@ page whose state came out of storage, so the reload the user reaches for first r
 
 `src/lib/session.js` stamps every snapshot with the schema it was written under and **discards any
 snapshot written under a different one**, rather than guessing what an old shape meant. The cost is
-a demo session that can be replayed in a minute.
+a demo session that can be replayed in a minute. One exception, made deliberately: a v3 snapshot held
+exactly one contract mixed in with the estate, and that contract may have been halfway through a
+negotiation, so its shape is known well enough to carry across rather than drop.
+
+### More than one contract at once
+
+Two kinds of snapshot, because two lifetimes. The **estate** — which contract is open, the role, the
+approval matrix, the audit trail, the Salesforce milestones — is one snapshot, read back on every
+mount. **Each contract** — draft, redline, decisions, signatures, obligations — is its own, with a
+summary row so the contract list can show twenty of them without deserialising twenty redlines.
+
+`ContractSession` holds the ninety-odd pieces of per-contract state and is keyed on the contract's
+id, so opening another contract is a remount that reads a different snapshot; nothing in that state
+has to know another contract exists. The estate is read *fresh* on each mount, not captured at page
+load, because a captured copy would hand the new mount the audit trail as it stood then and the next
+save would write that stale copy over everything logged since.
+
+**Create Contract from Salesforce opens a new contract**, unless one already exists for that
+onboarding record, in which case it opens that one rather than a duplicate. *Draft a contract* on the
+Contracts page does the same. The nav carries a switcher once there is more than one.
 
 `src/components/ErrorBoundary.jsx` is the other half: if a render throws anyway, the fallback is not
 an apology, it is the reset control, on a page that still renders, saying what it is about to throw
@@ -431,7 +515,8 @@ catalogue/            agreement types, templates, clause playbook: the source of
 catalogue/docx/       the same, as Word documents (generated, see npm run export:docx)
 src/data/             imports the catalogue; template assembly; the contract portfolio
 src/lib/              zip, unzip, xml, docx, docx-import, pdf, redline, crossref,
-                      playbook, rbac, documenso, ai, audit, session, counter, lifecycle
+                      playbook, rbac, documenso, ai, audit, session, counter, lifecycle,
+                      salesforce, sfauth
 src/components/       the four tabs, the draft studio, the document viewer, the charts
 scripts/selftest.js   482 checks over all of the above
 scripts/export-catalogue.js   writes catalogue/docx/

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>CLM_Workspace_URL__c</fullName>
+    <externalId>false</externalId>
+    <formula>IF(
+  AND(
+    ISPICKVAL(Onboarding_Status__c, "Approved - Ready to Contract"),
+    Qualification_Complete__c,
+    Insurance_Verified__c,
+    Bank_Verified__c,
+    Sanctions_Cleared__c
+  ),
+  HYPERLINK("http://localhost:5173/#sf?onb=" &amp; Id &amp; "&amp;acct=" &amp; Account__c, "Create Contract", "_blank"),
+  "Onboarding incomplete"
+)</formula>
+    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <label>Create Contract</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

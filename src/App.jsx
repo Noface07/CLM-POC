@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   RotateCcw, Bell, KeyRound, UserCog, X, Plus, BookOpen, ShieldCheck,
 } from "lucide-react";
@@ -10,7 +10,13 @@ import {
 } from "./data/contracts.js";
 import { AGREEMENT_TYPE_BY_CODE, TEMPLATE_BY_CODE, CLAUSE_BY_CODE } from "./data/catalogue.js";
 import { buildDraft, resolvedClauseWording, docToPlainText } from "./data/templates.js";
-import { SALESFORCE_DEFAULTS, pushMilestone } from "./lib/salesforce.js";
+import {
+  SALESFORCE_DEFAULTS, pushMilestone, upsertContract, getOnboarding, oauthEndpoints,
+  eligibility as onboardingEligibility, contextFor as sfContextFor,
+} from "./lib/salesforce.js";
+import {
+  isSignedIn, pendingCallback, completeLogin, beginLogin, signOut, fetchUserInfo, redirectUriFor,
+} from "./lib/sfauth.js";
 
 import {
   ROLES, ROLE_DESCRIPTIONS, ALL_ACCESS_ROLE, contractVisibility, visibleContracts, isReadOnly,
@@ -39,7 +45,10 @@ import {
   DEFAULT_CONFIG as DOCUMENSO_DEFAULTS, sendForSignature, simulateEnvelope, getEnvelope, certificateUrl,
 } from "./lib/documenso.js";
 import { downloadBlob } from "./lib/zip.js";
-import { readSnapshot, writeSnapshot, clearSnapshot } from "./lib/session.js";
+import {
+  readSnapshot, writeSnapshot, readContractSnapshot, writeContractSnapshot, listContractSessions,
+  clearAllSessions, newSessionId, migrate as migrateSession,
+} from "./lib/session.js";
 import {
   computeApprovalStatus, computeContractStatus, invalidationSatisfied,
 } from "./lib/lifecycle.js";
@@ -121,10 +130,70 @@ const MILESTONE_NOTE = {
 
 // Read once, at module load, and only if it was written under this build's schema.
 // See src/lib/session.js for why a mismatch is discarded rather than migrated.
-const SNAPSHOT = readSnapshot(window.localStorage);
+// A v3 snapshot held one contract mixed in with the estate. Carry it across before
+// anything reads, so the contract somebody was halfway through is the one that opens.
+migrateSession(window.localStorage);
 
-function restored(key, fallback) {
-  return SNAPSHOT && key in SNAPSHOT ? SNAPSHOT[key] : fallback;
+// The estate-wide snapshot, read at the moment it is asked for rather than once at module
+// load. ContractSession remounts on every contract switch and re-runs its initialisers;
+// a snapshot captured at page load would hand the new mount the role and audit trail as
+// they were then, and the next save would write that stale copy over everything logged
+// since. Reading fresh costs a small parse per mount and loses nothing.
+function restoredGlobal(key, fallback) {
+  const g = readSnapshot(window.localStorage);
+  return g && key in g ? g[key] : fallback;
+}
+
+// Which contract opens first.
+//
+// Create Contract from Salesforce carries an onboarding id; if a contract already exists
+// for that onboarding, that one opens rather than a duplicate. Otherwise the contract
+// that was open last time, otherwise the newest, otherwise a fresh one.
+function initialSessionId() {
+  const hash = window.location.hash;
+  const sessions = listContractSessions(window.localStorage);
+  if (hash.startsWith("#sf")) {
+    const q = new URLSearchParams(hash.slice(hash.indexOf("?") + 1));
+    const onb = q.get("onb");
+    const existing = onb && sessions.find((x) => x.summary?.onboardingId === onb);
+    return existing ? existing.id : newSessionId();
+  }
+  const last = restoredGlobal("activeContractId", null);
+  if (last && sessions.some((x) => x.id === last)) return last;
+  return sessions[0]?.id || newSessionId();
+}
+
+// The estate, and which contract in it is open.
+//
+// Every contract's lifecycle state lives in ContractSession, keyed on its id: switching
+// contracts remounts it, and every initialiser reads that contract's own snapshot. The
+// estate-wide state — role, matrix, audit trail, milestones — is persisted globally and
+// read back on every mount, so it survives the switch. This is what lets more than one
+// contract be worked on at once without the ninety pieces of per-contract state having
+// to know about each other.
+export default function CLMApp() {
+  const [active, setActive] = useState(() => initialSessionId());
+  const [landOn, setLandOn] = useState(null);
+
+  const switchTo = useCallback((id, pageAfter = "workspace") => {
+    setLandOn(pageAfter);
+    setActive(id);
+  }, []);
+  const startNew = useCallback((pageAfter = "draft") => {
+    const id = newSessionId();
+    switchTo(id, pageAfter);
+    return id;
+  }, [switchTo]);
+
+  return (
+    <ContractSession
+      key={active}
+      contractId={active}
+      initialPage={landOn}
+      onSwitchContract={switchTo}
+      onNewSession={startNew}
+    />
+  );
 }
 
 function findingKey(finding, index) {
@@ -139,10 +208,28 @@ const EMPTY_APPROVALS = {
 
 
 
-export default function CLMApp() {
-  const [page, setPage] = useState(() =>
-    window.location.hash.startsWith("#supplier") ? "supplier" : "dashboard");
-  const [currentRole, setCurrentRole] = useState("All Access (Demo Control)");
+function ContractSession({ contractId, initialPage, onSwitchContract, onNewSession }) {
+  // This contract's own snapshot. Read once per mount; the component is keyed on the
+  // contract id, so opening a different contract is a fresh mount and a fresh read.
+  const [local] = useState(() => readContractSnapshot(window.localStorage, contractId) || {});
+  const restored = (key, fallback) => (key in local ? local[key] : fallback);
+
+  // Arriving from Salesforce lands on the Salesforce panel, not the dashboard.
+  //
+  // Reading the onboarding record is a network call, and the draft cannot open until it
+  // returns. Starting on the dashboard meant the first thing anyone saw after clicking
+  // Create Contract was the estate overview — a page about every contract, at the moment
+  // they asked about one — before it jumped somewhere else. The panel has the arrival
+  // banner, so the wait says what it is waiting for.
+  const [page, setPage] = useState(() => {
+    if (initialPage) return initialPage;
+    const hash = window.location.hash;
+    if (hash.startsWith("#supplier")) return "supplier";
+    if (hash.startsWith("#sf")) return "salesforce";
+    if (pendingCallback()) return "salesforce";
+    return "dashboard";
+  });
+  const [currentRole, setCurrentRole] = useState(() => restoredGlobal("currentRole", "All Access (Demo Control)"));
   const [playbook, setPlaybook] = useState({ open: false, focus: null });
 
   const [draftRecord, setDraftRecord] = useState(() => restored("draftRecord", null));
@@ -169,11 +256,21 @@ export default function CLMApp() {
   const [exceptionDecisions, setExceptionDecisions] = useState(() => restored("exceptionDecisions", {}));
   const [exceptionModalKey, setExceptionModalKey] = useState(null);
   const [revisionSubmitted, setRevisionSubmitted] = useState({});
-  const [approvalMatrix, setApprovalMatrix] = useState(() => restored("approvalMatrix", DEFAULT_APPROVAL_MATRIX));
+  const [approvalMatrix, setApprovalMatrix] = useState(() => restoredGlobal("approvalMatrix", DEFAULT_APPROVAL_MATRIX));
 
-  const [salesforceConfig, setSalesforceConfig] = useState(SALESFORCE_DEFAULTS);
+  // A sign-in kept from an earlier visit switches the panel to live on boot. It is the
+  // whole point of the refresh token: the demo opens already connected.
+  const [salesforceConfig, setSalesforceConfig] = useState(() => (
+    isSignedIn() ? { ...SALESFORCE_DEFAULTS, mode: "live", authMode: "oauth" } : SALESFORCE_DEFAULTS
+  ));
+  const [sfSignedIn, setSfSignedIn] = useState(() => isSignedIn());
+  const [sfWhoami, setSfWhoami] = useState(null);
+  // The outcome of the last sign-in attempt, shown on the panel until the next one. A
+  // success needs saying as much as a failure: the browser has just come back from another
+  // site, and "nothing happened" and "it worked" look identical without it.
+  const [sfAuthStatus, setSfAuthStatus] = useState(null);
   const [sfRecord, setSfRecord] = useState(() => restored("sfRecord", null));
-  const [sfMilestones, setSfMilestones] = useState(() => restored("sfMilestones", []));
+  const [sfMilestones, setSfMilestones] = useState(() => restoredGlobal("sfMilestones", []));
   const [sfContext, setSfContext] = useState(() => restored("sfContext", null));
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [redlineReopened, setRedlineReopened] = useState(() => restored("redlineReopened", false));
@@ -217,6 +314,17 @@ export default function CLMApp() {
     return existing || `sup_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
   });
   const [openedViaLink] = useState(() => window.location.hash.startsWith("#supplier"));
+  // Salesforce hands the supplier over in the URL rather than asking the CLM to go
+  // looking. §6.1: the CLM opens in a contextual session, so the context arrives with
+  // the navigation instead of being chosen a second time on this side.
+  const [sfDeepLink, setSfDeepLink] = useState(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#sf")) return null;
+    const q = new URLSearchParams(hash.slice(hash.indexOf("?") + 1));
+    const onb = q.get("onb");
+    return onb ? { onboardingId: onb, accountId: q.get("acct") } : null;
+  });
+  const [sfArrival, setSfArrival] = useState(null);
   const [linkExpiry] = useState(() =>
     new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }));
 
@@ -246,10 +354,10 @@ export default function CLMApp() {
   const [closureTasks, setClosureTasks] = useState(() => restored("closureTasks", {}));
 
   const [notice, setNotice] = useState("");
-  const [auditLog, setAuditLog] = useState(() => restored("auditLog", []));
+  const [auditLog, setAuditLog] = useState(() => restoredGlobal("auditLog", []));
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [extraContracts, setExtraContracts] = useState(() => restored("extraContracts", []));
+  const [extraContracts, setExtraContracts] = useState(() => restoredGlobal("extraContracts", []));
   const [viewingContract, setViewingContract] = useState(null);
   const [showAddContract, setShowAddContract] = useState(false);
   const [newContract, setNewContract] = useState({ supplier: "", agreementTypeCode: "sow", category: "", evergreen: false });
@@ -359,9 +467,24 @@ export default function CLMApp() {
     };
   }, [draftRecord, contractStatus, aiChange]);
 
-  const allContracts = useMemo(
-    () => [...(liveContract ? [liveContract] : []), ...extraContracts, ...PORTFOLIO],
-    [liveContract, extraContracts]
+  // Every contract with a snapshot, this one live and the others from their summaries.
+  // Re-read when this contract changes, which is the only time a summary can change,
+  // since only the open contract is ever written.
+  const sessions = useMemo(
+    () => listContractSessions(window.localStorage),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contractId, liveContract]
+  );
+  const allContracts = useMemo(() => {
+    const others = sessions
+      .filter((x) => x.id !== contractId && x.summary)
+      .map((x) => ({ ...x.summary, sessionId: x.id }));
+    const mine = liveContract ? [{ ...liveContract, sessionId: contractId }] : [];
+    return [...mine, ...others, ...extraContracts, ...PORTFOLIO];
+  }, [sessions, liveContract, contractId, extraContracts]);
+  const openContracts = useMemo(
+    () => allContracts.filter((c) => c.sessionId),
+    [allContracts]
   );
   const myContracts = useMemo(() => visibleContracts(currentRole, allContracts), [currentRole, allContracts]);
   const canSeeLive = Boolean(liveContract) && myContracts.some((c) => c.id === liveContract.id);
@@ -486,24 +609,34 @@ export default function CLMApp() {
 
   useEffect(() => () => { if (envelopePdfUrl) URL.revokeObjectURL(envelopePdfUrl); }, [envelopePdfUrl]);
 
+  // Two snapshots, because two lifetimes.
+  //
+  // The estate's state is written under one key and read back on every mount, so it is
+  // there whichever contract is open. Each contract's state is written under its own key,
+  // with a summary row so the contract list can show it without loading the rest.
   useEffect(() => {
     writeSnapshot(window.localStorage, {
+      activeContractId: contractId, currentRole, approvalMatrix, sfMilestones, auditLog, extraContracts,
+    });
+  }, [contractId, currentRole, approvalMatrix, sfMilestones, auditLog, extraContracts]);
+
+  useEffect(() => {
+    writeContractSnapshot(window.localStorage, contractId, {
       draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted, changeDecisions, approvals, reviewInvalidated, aiChange,
       exceptionDecisions, envelope, aiObligations, validated, obligationLog, registerReviewed, sentToSupplier,
-      redlineReopened, declineReason, approvalMatrix, sfRecord, sfContext, sfMilestones, amendment,
+      redlineReopened, declineReason, sfRecord, sfContext, amendment,
       counterApprovals, findingsStale, aiChangeFor,
-      clientSigned, supplierViewed, supplierSigned, docVersion, auditLog, extraContracts, signatures,
-      closureTasks,
+      clientSigned, supplierViewed, supplierSigned, docVersion, signatures, closureTasks,
+      summary: liveContract ? { ...liveContract, onboardingId: sfRecord?.Id || null } : null,
     });
   // Every value written above is listed here. Anything missing simply never triggers a
   // save: the approval matrix was edited, nothing else changed, and the edit was gone on
   // the next reload.
-  }, [draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted,
+  }, [contractId, draftRecord, draftDoc, redlineDoc, supplierDraft, docHistory, extraHistory, supplierAccepted,
       changeDecisions, approvals, reviewInvalidated, aiChange, exceptionDecisions, envelope,
       aiObligations, validated, obligationLog, registerReviewed, sentToSupplier, redlineReopened, declineReason,
-      approvalMatrix, sfRecord, sfContext, sfMilestones, amendment, counterApprovals, findingsStale, aiChangeFor,
-      clientSigned, supplierViewed,
-      supplierSigned, docVersion, auditLog, extraContracts, signatures, closureTasks]);
+      sfRecord, sfContext, amendment, counterApprovals, findingsStale, aiChangeFor,
+      clientSigned, supplierViewed, supplierSigned, docVersion, signatures, closureTasks, liveContract]);
 
   const versions = [
     { key: "draft", label: `${draftDoc?.meta?.version || "v1.0"} Draft (Word)` },
@@ -594,11 +727,37 @@ export default function CLMApp() {
   async function syncToSalesforce(status, milestone) {
     if (!sfRecord || !draftRecord) return;
     try {
+      // Two writes, because they answer two questions. The onboarding record gets a
+      // pointer, so the journey that started this shows where it got to. The contract
+      // record gets the lifecycle, because that is the thing procurement reads.
       const stamp = await pushMilestone(salesforceConfig, sfRecord, {
         contractId: draftRecord.id, status, milestone,
       });
-      setSfMilestones((m) => [...m, stamp]);
-      logAudit(`Salesforce updated for ${sfRecord.Name}: ${status} (${milestone})`);
+      const contractStamp = await upsertContract(salesforceConfig, {
+        record: sfRecord,
+        contract: {
+          id: draftRecord.id,
+          agreementType: AGREEMENT_TYPE_BY_CODE[draftRecord.agreementTypeCode]?.name || draftRecord.agreementTypeCode,
+          templateName: TEMPLATE_BY_CODE[draftRecord.templateCode]?.name || draftRecord.templateCode,
+          templateVersion: TEMPLATE_BY_CODE[draftRecord.templateCode]?.version || "1.0",
+          status,
+          approvalStatus,
+          signatureStatus,
+          version: activeDoc?.meta?.version || docVersion,
+          value: Number(draftRecord.values.contract_value) || 0,
+          currency: draftRecord.values.currency_code || "GBP",
+          startDate: draftRecord.values.start_date || null,
+          endDate: draftRecord.evergreen ? null : (draftRecord.values.end_date || null),
+          evergreen: Boolean(draftRecord.evergreen),
+          effectiveDate: ["Executed", "Active"].includes(status) ? TODAY : null,
+          milestone,
+        },
+      });
+      setSfMilestones((m) => [...m, { ...stamp, poEligible: contractStamp.poEligible }]);
+      logAudit(
+        `Salesforce updated for ${sfRecord.Name}: ${status} (${milestone})`
+        + `, PO eligibility ${contractStamp.poEligible ? "Yes" : "No"}`
+      );
     } catch (err) {
       setSfMilestones((m) => [...m, {
         at: new Date().toISOString(), recordId: sfRecord.Id, recordName: sfRecord.Name,
@@ -624,11 +783,157 @@ export default function CLMApp() {
   // exactly as it does on a cold open. The persistence effect has the same hazard for the
   // same reason and is the next one to go.
   function resetDemo() {
-    clearSnapshot(window.localStorage);
+    clearAllSessions(window.localStorage);
     window.location.replace(window.location.pathname);
   }
 
+  // Arriving from the Create Contract link.
+  //
+  // The gate is re-run here rather than trusted from the link. The formula field rendered
+  // that link because the prerequisites passed when Salesforce last drew the page: a
+  // checkbox can be unticked between that render and the click, and a URL can be pasted
+  // from anywhere. Deciding again on this side is the difference between a gate and a
+  // suggestion.
+  // Coming back from the org's login page.
+  //
+  // The URL carries a code and a state. The state proves this tab started the sign-in;
+  // the code is traded for tokens through the token endpoint. Then the URL is cleaned, so
+  // a refresh does not try to spend the same code twice, and any Create Contract link that
+  // was interrupted by the sign-in is picked back up.
+  const sfCallbackHandled = useRef(false);
+  useEffect(() => {
+    if (!pendingCallback() || sfCallbackHandled.current) return;
+    sfCallbackHandled.current = true;
+    (async () => {
+      try {
+        const { returnTo } = await completeLogin({
+          ...oauthEndpoints(salesforceConfig), redirectUri: redirectUriFor(),
+        });
+        window.history.replaceState(null, "", window.location.pathname + (returnTo || ""));
+        setSalesforceConfig((c) => ({ ...c, mode: "live", authMode: "oauth" }));
+        setSfSignedIn(true);
+        setSfAuthStatus({ ok: true, message: "Signed in through your org. The connection renews itself.", at: Date.now() });
+        logAudit("Signed in to Salesforce (OAuth, PKCE)", null);
+        flash("Connected to Salesforce.");
+        if (returnTo && returnTo.startsWith("#sf")) {
+          const q = new URLSearchParams(returnTo.slice(returnTo.indexOf("?") + 1));
+          setSfDeepLink({ onboardingId: q.get("onb"), accountId: q.get("acct") });
+        }
+      } catch (err) {
+        window.history.replaceState(null, "", window.location.pathname);
+        setSfAuthStatus({ ok: false, message: err.message, at: Date.now() });
+        logAudit(`Salesforce sign-in failed: ${err.message}`, null);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Starting a sign-in. Nothing comes back on success — the page leaves — so the only
+  // outcome to record here is failing to leave, which is what happens when the consumer
+  // key is missing because the dev server was not restarted after .env changed.
+  async function connectToSalesforce() {
+    try {
+      await beginLogin({
+        ...oauthEndpoints(salesforceConfig),
+        redirectUri: redirectUriFor(),
+        returnTo: page === "salesforce" ? null : window.location.hash || null,
+      });
+    } catch (err) {
+      setSfAuthStatus({ ok: false, message: err.message, at: Date.now() });
+      logAudit(`Salesforce sign-in could not start: ${err.message}`, null);
+    }
+  }
+
+  async function disconnectFromSalesforce() {
+    await signOut(oauthEndpoints(salesforceConfig));
+    setSfSignedIn(false); setSfWhoami(null);
+    setSfAuthStatus({ ok: true, message: "Disconnected. The refresh token was revoked at the org.", at: Date.now() });
+    logAudit("Disconnected from Salesforce: refresh token revoked", null);
+    flash("Disconnected from Salesforce.");
+  }
+
+  // Who is connected, for the panel. Fetched once per sign-in; nothing depends on it.
+  useEffect(() => {
+    if (!sfSignedIn) { setSfWhoami(null); return; }
+    let cancelled = false;
+    fetchUserInfo(oauthEndpoints(salesforceConfig))
+      .then((u) => { if (!cancelled) setSfWhoami(u); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sfSignedIn]);
+
+  // One-shot per page load, guarded by a ref and deliberately NOT by a cancellation
+  // flag. Under StrictMode React runs this effect, runs its cleanup, and runs it again;
+  // the ref makes the second run a no-op, so a cleanup that cancelled the first run left
+  // nobody to finish the job. The arrival sat on "loading" and the page never moved.
+  // Every state this sets is idempotent, so letting the first run complete is correct.
+  const sfLinkHandled = useRef(false);
+  useEffect(() => {
+    if (!sfDeepLink || sfLinkHandled.current) return;
+    sfLinkHandled.current = true;
+    (async () => {
+      setSfArrival({ state: "loading", onboardingId: sfDeepLink.onboardingId });
+      try {
+        // Arriving from Salesforce without being signed in to it is the normal first
+        // visit. Sign in, and come back to this exact link afterwards.
+        if (salesforceConfig.mode === "live" && salesforceConfig.authMode === "oauth" && !isSignedIn()) {
+          await beginLogin({
+            ...oauthEndpoints(salesforceConfig),
+            redirectUri: redirectUriFor(),
+            returnTo: `#sf?onb=${encodeURIComponent(sfDeepLink.onboardingId)}&acct=${encodeURIComponent(sfDeepLink.accountId || "")}`,
+          });
+          return;
+        }
+        const record = await getOnboarding(salesforceConfig, sfDeepLink.onboardingId);
+        if (!record) {
+          setSfArrival({ state: "missing", onboardingId: sfDeepLink.onboardingId });
+          logAudit(`Create Contract opened from Salesforce for an onboarding record that could not be read (${sfDeepLink.onboardingId})`, null);
+          return;
+        }
+        const gate = onboardingEligibility(record);
+        if (!gate.eligible) {
+          setSfArrival({ state: "blocked", record, missing: gate.missing });
+          setPage("salesforce");
+          logAudit(
+            `Contract initiation blocked for ${record.Name}: `
+            + gate.missing.map((m) => m.label).join("; "),
+            null
+          );
+          flash(`${record.Name} is not ready to contract.`);
+          return;
+        }
+        setSfArrival({ state: "ready", record });
+        if (draftRecord) {
+          // The parent matched the link to the contract that already exists for this
+          // onboarding. Open it; initiating again would draft over it.
+          setPage("workspace");
+          window.history.replaceState(null, "", window.location.pathname);
+          flash(`${record.Name} already has a contract open. Showing it.`);
+          return;
+        }
+        createContractFromSalesforce(record, sfContextFor(record));
+        // Spend the link. Leaving it in the address bar means a refresh re-opens
+        // initiation over a draft that may already exist.
+        window.history.replaceState(null, "", window.location.pathname);
+      } catch (err) {
+        setSfArrival({ state: "error", detail: err.message });
+        setPage("salesforce");
+        logAudit(`Create Contract link could not reach Salesforce: ${err.message}`, null);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sfDeepLink]);
+
   function createContractFromSalesforce(record, context) {
+    // This contract already exists. A second supplier is a second contract, so it opens
+    // in a fresh session — handed over the same way Salesforce hands one over, so the
+    // new session reads the record itself and runs the same gate.
+    if (draftRecord) {
+      window.location.hash = `#sf?onb=${encodeURIComponent(record.Id)}&acct=${encodeURIComponent(record.AccountId || "")}`;
+      onNewSession("salesforce");
+      return;
+    }
     setSfRecord(record);
     setSfContext(context);
     setPage("draft");
@@ -1408,6 +1713,21 @@ export default function CLMApp() {
         {TABS.map(([label, key]) => nav(label, key))}
         {canReadAudit(currentRole) && nav("Audit trail", "audit")}
 
+        {openContracts.length > 1 && (
+          <div className="field" style={{ margin: 0, minWidth: 220 }}>
+            <select
+              className="input" value={contractId} aria-label="Switch contract"
+              title="Every contract with a session. Switching opens that contract's workspace."
+              onChange={(e) => onSwitchContract(e.target.value, "workspace")}
+              style={{ fontSize: 12, minHeight: 32, padding: "4px 8px" }}
+            >
+              {openContracts.map((c) => (
+                <option key={c.sessionId} value={c.sessionId}>{c.id} · {c.supplier}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="field" style={{ margin: 0, minWidth: 210 }}>
           <select
             className="input" value={currentRole} onChange={(e) => setCurrentRole(e.target.value)}
@@ -1535,8 +1855,12 @@ export default function CLMApp() {
                 filters={filters}
                 setFilters={setFilters}
                 canCreate={canCreateContract(currentRole)}
-                onOpen={(c) => (c.live ? setPage("workspace") : setViewingContract(c))}
-                onDraft={() => setPage("draft")}
+                onOpen={(c) => {
+                  if (c.sessionId && c.sessionId !== contractId) onSwitchContract(c.sessionId, "workspace");
+                  else if (c.live) setPage("workspace");
+                  else setViewingContract(c);
+                }}
+                onDraft={() => (contractExists ? onNewSession("draft") : setPage("draft"))}
                 onQuickAdd={() => setShowAddContract(true)}
               />
             )}
@@ -1861,8 +2185,15 @@ export default function CLMApp() {
                 setConfig={setSalesforceConfig}
                 onCreateContract={createContractFromSalesforce}
                 milestones={sfMilestones}
+                activeContractId={draftRecord?.id || null}
                 contractId={draftRecord?.id}
                 canCreate={canCreateContract(currentRole)}
+                arrival={sfArrival}
+                signedIn={sfSignedIn}
+                whoami={sfWhoami}
+                authStatus={sfAuthStatus}
+                onConnect={connectToSalesforce}
+                onDisconnect={disconnectFromSalesforce}
               />
             )}
 

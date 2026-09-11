@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Service_Category__c</fullName>
+    <externalId>false</externalId>
+    <label>Service Category</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+                <value>
+                    <fullName>Hard FM</fullName>
+                    <default>false</default>
+                    <label>Hard FM</label>
+                </value>
+                <value>
+                    <fullName>Soft FM</fullName>
+                    <default>false</default>
+                    <label>Soft FM</label>
+                </value>
+                <value>
+                    <fullName>Integrated FM</fullName>
+                    <default>false</default>
+                    <label>Integrated FM</label>
+                </value>
+                <value>
+                    <fullName>Cleaning</fullName>
+                    <default>false</default>
+                    <label>Cleaning</label>
+                </value>
+                <value>
+                    <fullName>Technical Maintenance</fullName>
+                    <default>false</default>
+                    <label>Technical Maintenance</label>
+                </value>
+                <value>
+                    <fullName>Engineering</fullName>
+                    <default>false</default>
+                    <label>Engineering</label>
+                </value>
+                <value>
+                    <fullName>Grounds/Landscaping</fullName>
+                    <default>false</default>
+                    <label>Grounds/Landscaping</label>
+                </value>
+                <value>
+                    <fullName>Waste Management</fullName>
+                    <default>false</default>
+                    <label>Waste Management</label>
+                </value>
+                <value>
+                    <fullName>Energy Management</fullName>
+                    <default>false</default>
+                    <label>Energy Management</label>
+                </value>
+                <value>
+                    <fullName>Other</fullName>
+                    <default>false</default>
+                    <label>Other</label>
+                </value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>

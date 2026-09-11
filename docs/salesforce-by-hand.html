@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Building the FM CLM Salesforce org through the interface, with the full connection walkthrough.">
+<style>
+  html { color-scheme: light dark; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Salesforce By Hand</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    --ground:#F6F7FA; --surface:#FFFFFF; --surface-2:#EFF1F7;
+    --ink:#131A29; --ink-2:#515C74; --ink-3:#7C879E;
+    --rule:#DEE3EE; --rule-strong:#C3CBDC;
+    --clm:#2B4ACB; --clm-soft:#E9EDFC;
+    --org:#A0650F; --org-soft:#FBF1DE;
+    --ok:#2E6B45; --ok-soft:#E2F0E7;
+    --gap:#A62F38; --gap-soft:#FAE7E8;
+    --warn:#8A5A0C; --warn-soft:#FBF0DB;
+    --shadow:0 1px 2px rgba(19,26,41,.05), 0 8px 24px -16px rgba(19,26,41,.28);
+    --display:"Newsreader", Georgia, serif;
+    --body:"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono:"IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --measure:70ch; --pad:clamp(1.25rem,4vw,3rem);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0D1120; --surface:#151A2B; --surface-2:#1D2337;
+      --ink:#E7EBF4; --ink-2:#A0AAC1; --ink-3:#7A8499;
+      --rule:#29314A; --rule-strong:#3B4665;
+      --clm:#93A5F7; --clm-soft:#1B2340;
+      --org:#E6B463; --org-soft:#2C2314;
+      --ok:#74CE96; --ok-soft:#16291F;
+      --gap:#EC8288; --gap-soft:#2C1719;
+      --warn:#E3B667; --warn-soft:#2A2213;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1120; --surface:#151A2B; --surface-2:#1D2337;
+    --ink:#E7EBF4; --ink-2:#A0AAC1; --ink-3:#7A8499;
+    --rule:#29314A; --rule-strong:#3B4665;
+    --clm:#93A5F7; --clm-soft:#1B2340;
+    --org:#E6B463; --org-soft:#2C2314;
+    --ok:#74CE96; --ok-soft:#16291F;
+    --gap:#EC8288; --gap-soft:#2C1719;
+    --warn:#E3B667; --warn-soft:#2A2213;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing:border-box; }
+  body { background:var(--ground); color:var(--ink); font-family:var(--body); font-size:16px; line-height:1.62; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:80rem; margin:0 auto; padding:var(--pad); display:flex; flex-direction:column; gap:clamp(2.4rem,5vw,3.6rem); }
+  .col { max-width:var(--measure); }
+
+  h1,h2,h3 { font-family:var(--display); font-weight:600; text-wrap:balance; margin:0; }
+  h1 { font-size:clamp(2.1rem,5vw,3.05rem); line-height:1.08; letter-spacing:-.015em; }
+  h2 { font-size:clamp(1.45rem,3vw,1.88rem); line-height:1.2; letter-spacing:-.01em; }
+  h3 { font-size:1.06rem; line-height:1.32; }
+  p { margin:0; }
+  a { color:var(--clm); }
+  a:focus-visible { outline:2px solid var(--clm); outline-offset:3px; }
+
+  code, pre, .mono { font-family:var(--mono); font-variant-ligatures:none; }
+  code:not(pre code) { font-size:.85em; background:var(--surface-2); border:1px solid var(--rule); padding:.08em .34em; border-radius:3px; word-break:break-word; }
+  pre { margin:0; background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--org); padding:.9rem 1rem; overflow-x:auto; font-size:.78rem; line-height:1.68; }
+
+  .eyebrow { font-family:var(--mono); font-size:.71rem; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3); }
+  .standfirst { font-size:1.08rem; color:var(--ink-2); max-width:62ch; }
+  .masthead { display:flex; flex-direction:column; gap:1.1rem; }
+
+  section { display:flex; flex-direction:column; gap:1.25rem; }
+  .sec-head { display:flex; flex-direction:column; gap:.45rem; }
+  .prose { display:flex; flex-direction:column; gap:.85rem; max-width:var(--measure); }
+  .prose p { color:var(--ink-2); }
+  .prose p strong, li strong, td strong { color:var(--ink); font-weight:600; }
+
+  .scroll-x { overflow-x:auto; border:1px solid var(--rule); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-size:.84rem; min-width:32rem; }
+  thead th { text-align:left; font-family:var(--mono); font-weight:500; font-size:.66rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); padding:.62rem .8rem; border-bottom:1px solid var(--rule-strong); white-space:nowrap; }
+  tbody td { padding:.55rem .8rem; border-bottom:1px solid var(--rule); vertical-align:top; line-height:1.48; }
+  tbody tr:last-child td { border-bottom:0; }
+  td.k { font-family:var(--mono); font-size:.76rem; white-space:nowrap; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  .chip { display:inline-flex; align-items:center; font-family:var(--mono); font-size:.65rem; letter-spacing:.07em; text-transform:uppercase; padding:.15rem .42rem; border-radius:2px; white-space:nowrap; }
+  .chip-ok{background:var(--ok-soft);color:var(--ok);} .chip-org{background:var(--org-soft);color:var(--org);}
+  .chip-warn{background:var(--warn-soft);color:var(--warn);} .chip-gap{background:var(--gap-soft);color:var(--gap);}
+
+  .steps { display:flex; flex-direction:column; gap:2.3rem; }
+  .stp { display:grid; grid-template-columns:2.8rem 1fr; gap:1.2rem; align-items:start; }
+  .stp-n { font-family:var(--display); font-size:1.8rem; line-height:1; color:var(--ink-3); font-variant-numeric:tabular-nums; padding-top:.06rem; }
+  .stp-b { display:flex; flex-direction:column; gap:.95rem; min-width:0; }
+  .stp-h { display:flex; flex-direction:column; gap:.35rem; }
+  .stp-meta { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
+  @media (max-width:620px){ .stp{grid-template-columns:1fr;gap:.4rem;} .stp-n{font-size:1.3rem;} }
+
+  ol.clicks, ul.clicks { margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.58rem; font-size:.92rem; color:var(--ink-2); max-width:68ch; }
+  ol.clicks li::marker { color:var(--org); font-family:var(--mono); font-size:.84em; }
+  ul.clicks li::marker { color:var(--ink-3); }
+  ol.clicks ol, ol.clicks ul { margin-top:.5rem; }
+  .ui { font-family:var(--body); font-weight:600; color:var(--ink); background:var(--surface-2); border:1px solid var(--rule); padding:.03em .36em; border-radius:3px; font-size:.94em; white-space:nowrap; }
+  .path { font-family:var(--mono); font-size:.86em; color:var(--ink); }
+
+  .note { background:var(--warn-soft); border:1px solid color-mix(in srgb, var(--warn) 26%, transparent); padding:.75rem .92rem; font-size:.86rem; line-height:1.55; display:flex; flex-direction:column; gap:.32rem; max-width:var(--measure); }
+  .note-h { font-weight:600; color:var(--ink); }
+  .note.ok { background:var(--ok-soft); border-color:color-mix(in srgb, var(--ok) 26%, transparent); }
+  .note.bad { background:var(--gap-soft); border-color:color-mix(in srgb, var(--gap) 26%, transparent); }
+
+  footer { border-top:1px solid var(--rule); padding-top:1.25rem; font-size:.83rem; color:var(--ink-3); max-width:var(--measure); display:flex; flex-direction:column; gap:.4rem; }
+  @media (prefers-reduced-motion: reduce){ *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;} }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">FM AI-CLM POC · the same org, built by clicking · companion to Salesforce Round Trip</div>
+  <h1>Salesforce By Hand</h1>
+  <p class="standfirst">
+    Everything the deploy command created, done through the Salesforce interface instead: two objects, forty fields,
+    the formula that gates contract initiation, the demo records, and the app to see them in. Every value here is
+    read out of the metadata that is actually deployed in your org, so the two cannot drift.
+  </p>
+  <div class="note col">
+    <span class="note-h">Read this as reference, not as a to-do list.</span>
+    <p>Your org already has all of it. This exists for the time you need to rebuild in an org where you cannot run
+    the CLI &mdash; a client&rsquo;s sandbox, a locked-down environment, or a screen-share where somebody wants to
+    watch it being made. Budget <strong>two to three hours</strong>; the field creation is the bulk of it.</p>
+  </div>
+</header>
+
+<!-- ORIENTATION -->
+<section>
+  <div class="sec-head">
+    <h2>Finding anything in Setup</h2>
+    <p class="col" style="color:var(--ink-2);">The single thing that makes Salesforce navigable. Learn this and the rest is forms.</p>
+  </div>
+  <div class="prose">
+    <p>The <strong>gear icon</strong> at the top-right opens a short menu &mdash; Setup, Data Cloud Setup, Developer
+    Console. That menu is <em>not</em> Setup. Click <span class="ui">Setup</span> in it and a new tab opens.</p>
+    <p>Inside Setup, the only navigation that matters is the <strong>Quick Find</strong> box at the top of the
+    left-hand column. Almost nothing is reachable by browsing the tree; you type what you want and click the result.
+    Every instruction below is written as <span class="path">Setup &rarr; Quick Find: &ldquo;…&rdquo;</span>, meaning
+    type that phrase into the box.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>To do this</th><th>Quick Find for</th></tr></thead>
+      <tbody>
+        <tr><td>Create or edit objects and fields</td><td class="k">Object Manager</td></tr>
+        <tr><td>Create the app and its navigation</td><td class="k">App Manager</td></tr>
+        <tr><td>Grant access to fields and objects</td><td class="k">Permission Sets</td></tr>
+        <tr><td>Allow the browser to call the API from a deployed site</td><td class="k">CORS</td></tr>
+        <tr><td>Check when a trial org expires</td><td class="k">Company Information</td></tr>
+        <tr><td>Run a snippet of Apex or read a session id</td><td class="k">Developer Console <span class="chip chip-org">gear menu</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- STEPS -->
+<section class="steps">
+
+  <!-- 1 -->
+  <div class="stp">
+    <div class="stp-n">1</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">object manager</span><span class="eyebrow">10 min</span></div>
+        <h2>Create the two objects</h2>
+      </div>
+      <div class="prose"><p>Do both now; the second object needs the first to exist before you can point a lookup at it.</p></div>
+      <ol class="clicks">
+        <li><span class="path">Setup &rarr; Quick Find: &ldquo;Object Manager&rdquo;</span> &rarr; <span class="ui">Create</span> (top right) &rarr; <span class="ui">Custom Object</span></li>
+        <li>Fill in, for the first object:
+          <div class="scroll-x" style="margin-top:.55rem;">
+            <table>
+              <thead><tr><th>Field on the form</th><th>Value</th></tr></thead>
+              <tbody>
+                <tr><td>Label</td><td><strong>Supplier Onboarding</strong></td></tr>
+                <tr><td>Plural Label</td><td>Supplier Onboarding</td></tr>
+                <tr><td>Object Name</td><td class="k">Supplier_Onboarding</td></tr>
+                <tr><td>Record Name</td><td>Onboarding Number</td></tr>
+                <tr><td>Data Type</td><td><strong>Auto Number</strong></td></tr>
+                <tr><td>Display Format</td><td class="k">ONB-{YYYY}-{0000}</td></tr>
+                <tr><td>Starting Number</td><td class="num">0</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </li>
+        <li>Tick <span class="ui">Allow Reports</span>, <span class="ui">Allow Search</span>, and
+        <span class="ui">Allow Bulk API Access</span>.</li>
+        <li>Under <em>Deployment Status</em> choose <span class="ui">Deployed</span>.</li>
+        <li>Tick <span class="ui">Launch New Custom Tab Wizard</span> &mdash; this saves doing tabs separately later.
+        Pick any icon; the tab style has no meaning.</li>
+        <li><span class="ui">Save</span>.</li>
+        <li>Repeat for the second object: Label <strong>CLM Contract</strong>, Plural <strong>CLM Contracts</strong>,
+        Object Name <code>CLM_Contract</code>, Record Name <em>Contract Record Number</em>, Auto Number, format
+        <code>CLM-{0000}</code>.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">Object Name is not the label.</span>
+        <p>Salesforce appends <code>__c</code> to whatever you type, giving <code>Supplier_Onboarding__c</code>. The
+        CLM queries that exact string, so a typo here is a rename later, not a cosmetic difference.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="stp">
+    <div class="stp-n">2</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">object manager</span><span class="eyebrow">the long part &mdash; 90 min</span></div>
+        <h2>Create the forty fields</h2>
+      </div>
+      <div class="prose">
+        <p>Every field is the same four screens: <strong>choose a type &rarr; enter details &rarr; field-level
+        security &rarr; page layouts</strong>. On screens three and four take the defaults &mdash; tick everything and
+        click through. The tables below give screen two.</p>
+        <p>The route is <span class="path">Object Manager &rarr; [object] &rarr; Fields &amp; Relationships &rarr;
+        New</span>.</p>
+      </div>
+
+      <h3>Supplier Onboarding &mdash; 20 fields</h3>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Field Label</th><th>Type</th><th>Field Name (API)</th><th>Settings</th></tr></thead>
+          <tbody>
+            <tr><td>Account</td><td>Lookup Relationship</td><td class="k">Account</td><td>Related To <strong>Account</strong>; tick <strong>Required</strong>. Child Relationship Name <code>Supplier_Onboarding</code></td></tr>
+            <tr><td>Onboarding Status</td><td>Picklist</td><td class="k">Onboarding_Status</td><td>Values below. Tick <em>restrict to defined values</em></td></tr>
+            <tr><td>Qualification Complete</td><td>Checkbox</td><td class="k">Qualification_Complete</td><td>Default Unchecked</td></tr>
+            <tr><td>Insurance Verified</td><td>Checkbox</td><td class="k">Insurance_Verified</td><td>Default Unchecked</td></tr>
+            <tr><td>Bank Verified</td><td>Checkbox</td><td class="k">Bank_Verified</td><td>Default Unchecked</td></tr>
+            <tr><td>Sanctions Cleared</td><td>Checkbox</td><td class="k">Sanctions_Cleared</td><td>Default Unchecked</td></tr>
+            <tr><td>Supplier Category</td><td>Picklist</td><td class="k">Supplier_Category</td><td>3 values, below</td></tr>
+            <tr><td>Service Category</td><td>Picklist</td><td class="k">Service_Category</td><td>10 values, below</td></tr>
+            <tr><td>Facility / Site</td><td>Text</td><td class="k">Facility_Site</td><td>Length <span class="num">120</span></td></tr>
+            <tr><td>Legal Entity (ours)</td><td>Text</td><td class="k">Legal_Entity</td><td>Length <span class="num">120</span></td></tr>
+            <tr><td>Business Unit</td><td>Text</td><td class="k">Business_Unit</td><td>Length <span class="num">80</span></td></tr>
+            <tr><td>Business Owner</td><td>Text</td><td class="k">Business_Owner</td><td>Length <span class="num">80</span></td></tr>
+            <tr><td>Procurement Owner</td><td>Text</td><td class="k">Procurement_Owner</td><td>Length <span class="num">80</span></td></tr>
+            <tr><td>Company Number</td><td>Text</td><td class="k">Company_Number</td><td>Length <span class="num">20</span></td></tr>
+            <tr><td>Primary Contact</td><td>Text</td><td class="k">Primary_Contact</td><td>Length <span class="num">120</span></td></tr>
+            <tr><td>Anticipated Contract Value</td><td>Currency</td><td class="k">Contract_Value</td><td>Length <span class="num">16</span>, Decimal Places <span class="num">2</span></td></tr>
+            <tr><td>Payment Terms</td><td>Text</td><td class="k">Payment_Terms</td><td>Length <span class="num">40</span></td></tr>
+            <tr><td>CLM Contract Id</td><td>Text</td><td class="k">CLM_Contract_Id</td><td>Length <span class="num">40</span></td></tr>
+            <tr><td>CLM Contract Status</td><td>Text</td><td class="k">CLM_Contract_Status</td><td>Length <span class="num">60</span></td></tr>
+            <tr><td>Create Contract</td><td>Formula (Text)</td><td class="k">CLM_Workspace_URL</td><td><strong>Do this one last</strong> &mdash; step 3</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top:.4rem;">CLM Contract &mdash; 20 fields</h3>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Field Label</th><th>Type</th><th>Field Name (API)</th><th>Settings</th></tr></thead>
+          <tbody>
+            <tr><td>Supplier</td><td>Lookup Relationship</td><td class="k">Supplier</td><td>Related To <strong>Account</strong>. Child Relationship <code>CLM_Contracts</code></td></tr>
+            <tr><td>Onboarding</td><td>Lookup Relationship</td><td class="k">Onboarding</td><td>Related To <strong>Supplier Onboarding</strong>. Child Relationship <code>CLM_Contracts</code></td></tr>
+            <tr><td>Contract Reference</td><td>Text</td><td class="k">Contract_Reference</td><td>Length <span class="num">40</span>; tick <strong>External ID</strong> and <strong>Unique</strong></td></tr>
+            <tr><td>Agreement Type</td><td>Text</td><td class="k">Agreement_Type</td><td>Length <span class="num">80</span></td></tr>
+            <tr><td>Contract Template</td><td>Text</td><td class="k">Contract_Template</td><td>Length <span class="num">80</span></td></tr>
+            <tr><td>Template Version</td><td>Text</td><td class="k">Template_Version</td><td>Length <span class="num">20</span></td></tr>
+            <tr><td>Contract Status</td><td>Picklist</td><td class="k">Contract_Status</td><td>16 values, below</td></tr>
+            <tr><td>Approval Status</td><td>Picklist</td><td class="k">Approval_Status</td><td>6 values, below</td></tr>
+            <tr><td>Signature Status</td><td>Picklist</td><td class="k">Signature_Status</td><td>7 values, below</td></tr>
+            <tr><td>Current Version</td><td>Text</td><td class="k">Current_Version</td><td>Length <span class="num">20</span></td></tr>
+            <tr><td>Contract Value</td><td>Currency</td><td class="k">Contract_Value</td><td><span class="num">16</span>, <span class="num">2</span></td></tr>
+            <tr><td>Currency Code</td><td>Text</td><td class="k">Currency_Code</td><td>Length <span class="num">3</span></td></tr>
+            <tr><td>Start Date</td><td>Date</td><td class="k">Start_Date</td><td></td></tr>
+            <tr><td>End Date</td><td>Date</td><td class="k">End_Date</td><td></td></tr>
+            <tr><td>Evergreen</td><td>Checkbox</td><td class="k">Evergreen</td><td>Default Unchecked</td></tr>
+            <tr><td>Effective Date</td><td>Date</td><td class="k">Effective_Date</td><td></td></tr>
+            <tr><td>PO Eligibility</td><td>Checkbox</td><td class="k">PO_Eligibility</td><td>Default Unchecked</td></tr>
+            <tr><td>Executed Document URL</td><td>URL</td><td class="k">Executed_Document_URL</td><td></td></tr>
+            <tr><td>Last Milestone</td><td>Text</td><td class="k">Last_Milestone</td><td>Length <span class="num">255</span></td></tr>
+            <tr><td>Last Sync</td><td>Date/Time</td><td class="k">Last_Sync</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top:.4rem;">Picklist values, exactly</h3>
+      <div class="prose">
+        <p>These strings are what the CLM writes. A mismatch does not warn &mdash; the write fails with
+        <code>INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST</code>. Paste them one per line into the values box.</p>
+      </div>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Picklist</th><th>Values</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Onboarding_Status__c</td><td class="mono" style="font-size:.78rem;">Approved - Ready to Contract · Insurance Pending · In Qualification · Rejected</td></tr>
+            <tr><td class="k">Supplier_Category__c</td><td class="mono" style="font-size:.78rem;">Facilities Services · Hard Services · Soft Services</td></tr>
+            <tr><td class="k">Service_Category__c</td><td class="mono" style="font-size:.78rem;">Hard FM · Soft FM · Integrated FM · Cleaning · Technical Maintenance · Engineering · Grounds/Landscaping · Waste Management · Energy Management · Other</td></tr>
+            <tr><td class="k">Contract_Status__c</td><td class="mono" style="font-size:.78rem;">Draft · Internal Review · In Negotiation · Exception Review · Approved · Ready for Signature · Signature Pending · Executed · Active · Amendment in Progress · Renewal in Progress · Expiring · Expired · Termination in Progress · Terminated · Cancelled</td></tr>
+            <tr><td class="k">Approval_Status__c</td><td class="mono" style="font-size:.78rem;">Not Started · In Progress · Approved · Rejected · Changes Requested · Exception Approval Required</td></tr>
+            <tr><td class="k">Signature_Status__c</td><td class="mono" style="font-size:.78rem;">Not Ready · Pending · Partially Signed · Executed · Declined · Expired · Cancelled</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note bad col">
+        <span class="note-h">Two rules the form will not warn you about.</span>
+        <p><strong>A required lookup cannot be Set Null on delete.</strong> When you tick Required on
+        <em>Account</em>, choose <span class="ui">Don't allow deletion…</span> for the delete behaviour, or the save
+        is rejected.</p>
+        <p><strong>Currency fields need multi-currency for a currency <em>picker</em>.</strong> A fresh org has one
+        currency, which is fine &mdash; that is why the CLM sends <code>Currency_Code__c</code> as plain text rather
+        than relying on <code>CurrencyIsoCode</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="stp">
+    <div class="stp-n">3</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">the important one</span><span class="eyebrow">5 min</span></div>
+        <h2>The Create Contract formula</h2>
+      </div>
+      <div class="prose">
+        <p>This is the gate. It only offers the link when all four prerequisites are met, and it recomputes every time
+        the page is drawn &mdash; nothing is scheduled or cached.</p>
+      </div>
+      <ol class="clicks">
+        <li><span class="path">Object Manager &rarr; Supplier Onboarding &rarr; Fields &amp; Relationships &rarr; New</span></li>
+        <li>Type <span class="ui">Formula</span> &rarr; <span class="ui">Next</span></li>
+        <li>Field Label <strong>Create Contract</strong>, Field Name <code>CLM_Workspace_URL</code>, Formula Return
+        Type <span class="ui">Text</span> &rarr; <span class="ui">Next</span></li>
+        <li>Click <span class="ui">Advanced Formula</span> and paste:</li>
+      </ol>
+      <pre>IF(
+  AND(
+    ISPICKVAL(Onboarding_Status__c, "Approved - Ready to Contract"),
+    Qualification_Complete__c,
+    Insurance_Verified__c,
+    Bank_Verified__c,
+    Sanctions_Cleared__c
+  ),
+  HYPERLINK("http://localhost:5173/#sf?onb=" &amp; Id &amp; "&amp;acct=" &amp; Account__c,
+            "Create Contract", "_blank"),
+  "Onboarding incomplete"
+)</pre>
+      <ol class="clicks" start="5">
+        <li><span class="ui">Check Syntax</span>. It should say no errors.</li>
+        <li><span class="ui">Next</span>, <span class="ui">Next</span>, <span class="ui">Save</span>.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">Change the URL when you deploy the CLM.</span>
+        <p><code>http://localhost:5173</code> is your dev server. For a hosted demo, edit this formula and swap it for
+        the deployed address. Both ids must survive the change: <code>onb</code> is the record the CLM writes status
+        back to, <code>acct</code> is the supplier a contract belongs to.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="stp">
+    <div class="stp-n">4</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">permission sets</span><span class="eyebrow">10 min</span></div>
+        <h2>Grant yourself access</h2>
+      </div>
+      <div class="prose">
+        <p>Creating a field does not give anyone access to it, including you. Skip this and records look empty for no
+        visible reason.</p>
+      </div>
+      <ol class="clicks">
+        <li><span class="path">Setup &rarr; Quick Find: &ldquo;Permission Sets&rdquo;</span> &rarr; <span class="ui">New</span></li>
+        <li>Label <strong>CLM Integration</strong>, API Name <code>CLM_Integration</code>, License
+        <span class="ui">--None--</span> &rarr; <span class="ui">Save</span>
+          <ul class="clicks" style="margin-top:.5rem;"><li>Leaving the licence as None is deliberate: a permission set tied to a licence can only be assigned to users who hold it.</li></ul>
+        </li>
+        <li>Click <span class="ui">Object Settings</span>. For <strong>Supplier Onboarding</strong> and
+        <strong>CLM Contracts</strong>, in each: <span class="ui">Edit</span> &rarr; tick every Object Permission
+        (Read, Create, Edit, Delete, View All, Modify All) &rarr; tick <strong>Read</strong> and <strong>Edit</strong>
+        on every field &rarr; <span class="ui">Save</span>.
+          <ul class="clicks" style="margin-top:.5rem;">
+            <li><strong>Create Contract</strong> is a formula &mdash; it offers Read only. That is correct.</li>
+            <li><strong>Account</strong> on Supplier Onboarding is required, so it shows no checkboxes at all. Also correct: a field you must fill in cannot be hidden from anyone.</li>
+          </ul>
+        </li>
+        <li>Back on the permission set, click <span class="ui">Assigned Users</span> &rarr;
+        <span class="ui">Add Assignments</span> &rarr; tick yourself &rarr; <span class="ui">Assign</span>.</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <div class="stp">
+    <div class="stp-n">5</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">app manager</span><span class="eyebrow">5 min</span></div>
+        <h2>Build the app, so you can find any of it</h2>
+      </div>
+      <div class="prose">
+        <p>Without this the objects exist but are only reachable through the App Launcher, which caches badly and
+        opens them as temporary tabs that vanish. A dedicated app is additive and cannot disturb anything already in
+        the org.</p>
+      </div>
+      <ol class="clicks">
+        <li><span class="path">Setup &rarr; Quick Find: &ldquo;App Manager&rdquo;</span> &rarr;
+        <span class="ui">New Lightning App</span> (top right)</li>
+        <li>App Name <strong>FM Contracting</strong>, Developer Name <code>FM_Contracting</code> &rarr;
+        <span class="ui">Next</span></li>
+        <li>Appearance and Utility Items: skip both with <span class="ui">Next</span>.</li>
+        <li><strong>Navigation Items</strong>: move <em>Home</em>, <em>Accounts</em>, <em>Supplier Onboarding</em> and
+        <em>CLM Contracts</em> into Selected &rarr; <span class="ui">Next</span></li>
+        <li><strong>User Profiles</strong>: add <em>System Administrator</em> &rarr; <span class="ui">Save &amp; Finish</span></li>
+        <li>Open the App Launcher (nine dots, top-left) and pick <strong>FM Contracting</strong>.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">If the app does not appear, log out and back in.</span>
+        <p>App visibility is cached for the session. A hard refresh often is not enough; logging out reliably rebuilds
+        the navigation.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 -->
+  <div class="stp">
+    <div class="stp-n">6</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">list views</span><span class="eyebrow">3 min</span></div>
+        <h2>Add an &ldquo;All&rdquo; list view</h2>
+      </div>
+      <div class="prose">
+        <p>A new object ships with one list view: <em>Recently Viewed</em>, which shows records <strong>you</strong>
+        have personally opened. Records created by a script or an API call are not in it, so a correctly populated
+        object looks identical to an empty one. This is the single most confusing thing about a fresh custom object.</p>
+      </div>
+      <ol class="clicks">
+        <li>Open the object&rsquo;s tab, then the <span class="ui">gear icon</span> above the list &rarr;
+        <span class="ui">New</span></li>
+        <li>List Name <strong>All</strong>, and under <em>Who sees this list view</em> pick
+        <span class="ui">All users can see this list view</span> &rarr; <span class="ui">Save</span></li>
+        <li>In the filter panel that opens, set <strong>Filter by Owner</strong> to
+        <span class="ui">All supplier onboarding</span> &rarr; <span class="ui">Save</span></li>
+        <li>Click <span class="ui">Select Fields to Display</span> and add the columns worth seeing:
+        Onboarding Status, Service Category, Anticipated Contract Value, CLM Contract Status.</li>
+        <li>Repeat for CLM Contracts: Contract Reference, Supplier, Contract Status, Current Version, PO Eligibility.</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- 7 -->
+  <div class="stp">
+    <div class="stp-n">7</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">records</span><span class="eyebrow">15 min</span></div>
+        <h2>Create the three demo suppliers</h2>
+      </div>
+      <div class="prose">
+        <p>Each one is an <strong>Account</strong> plus a <strong>Supplier Onboarding</strong> record pointing at it.
+        Make all three Accounts first, then the onboarding records.</p>
+      </div>
+
+      <h3>Accounts</h3>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Account Name</th><th>Billing Street</th><th>City</th><th>Country</th></tr></thead>
+          <tbody>
+            <tr><td>Meridian Cleaning &amp; Technical Services Ltd.</td><td>Unit 4, Fairfax Industrial Park, Reading RG2 0TD</td><td>Reading</td><td>United Kingdom</td></tr>
+            <tr><td>Ferrow Pest Control</td><td>12 Bell Lane, Slough SL1 2QP</td><td>Slough</td><td>United Kingdom</td></tr>
+            <tr><td>Calder Mechanical &amp; Electrical Ltd.</td><td>Calder Works, Wakefield WF2 7AS</td><td>Wakefield</td><td>United Kingdom</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top:.4rem;">Supplier Onboarding records</h3>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Field</th><th>Meridian <span class="chip chip-ok">ready</span></th><th>Ferrow <span class="chip chip-gap">blocked</span></th><th>Calder <span class="chip chip-ok">ready</span></th></tr></thead>
+          <tbody>
+            <tr><td class="k">Account</td><td>Meridian Cleaning…</td><td>Ferrow Pest Control</td><td>Calder Mechanical…</td></tr>
+            <tr><td class="k">Onboarding Status</td><td>Approved - Ready to Contract</td><td><strong>Insurance Pending</strong></td><td>Approved - Ready to Contract</td></tr>
+            <tr><td class="k">Qualification Complete</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td class="k">Insurance Verified</td><td>✓</td><td><strong>✗</strong></td><td>✓</td></tr>
+            <tr><td class="k">Bank Verified</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td class="k">Sanctions Cleared</td><td>✓</td><td><strong>✗</strong></td><td>✓</td></tr>
+            <tr><td class="k">Supplier Category</td><td>Facilities Services</td><td>Facilities Services</td><td>Hard Services</td></tr>
+            <tr><td class="k">Service Category</td><td>Integrated FM</td><td>Other</td><td>Technical Maintenance</td></tr>
+            <tr><td class="k">Facility / Site</td><td>Riverside Corporate Campus - Building C</td><td>Riverside Corporate Campus - Building C</td><td>Northgate Distribution Park</td></tr>
+            <tr><td class="k">Legal Entity (ours)</td><td colspan="3">Meridian FM Services (UK) Ltd &mdash; the same for all three</td></tr>
+            <tr><td class="k">Business Unit</td><td>Corporate Real Estate</td><td>Corporate Real Estate</td><td>Industrial &amp; Logistics</td></tr>
+            <tr><td class="k">Business Owner</td><td>R. Ashworth</td><td>R. Ashworth</td><td>P. Mensah</td></tr>
+            <tr><td class="k">Procurement Owner</td><td colspan="3">D. Whitfield</td></tr>
+            <tr><td class="k">Company Number</td><td class="num">08841221</td><td class="num">09102338</td><td class="num">07733114</td></tr>
+            <tr><td class="k">Primary Contact</td><td>Kavita Bhatt, Account Director</td><td>J. Ferrow</td><td>H. Vance, Commercial Manager</td></tr>
+            <tr><td class="k">Anticipated Contract Value</td><td class="num">486000</td><td class="num">64000</td><td class="num">1240000</td></tr>
+            <tr><td class="k">Payment Terms</td><td>45 days from invoice</td><td>30 days from invoice</td><td>60 days from invoice</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note ok col">
+        <span class="note-h">Ferrow is the point, not filler.</span>
+        <p>Two unticked boxes make it the record that proves the gate is real: its <strong>Create Contract</strong>
+        field reads <em>&ldquo;Onboarding incomplete&rdquo;</em> instead of a link. Tick both, save, and the link
+        appears instantly. Untick one and it goes. Calder at £1.24m clears every approval threshold in the matrix,
+        which is what you want when demoing escalation rather than plain approval.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8 -->
+  <div class="stp">
+    <div class="stp-n">8</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">connect the clm</span><span class="eyebrow">5 min</span></div>
+        <h2>Get a token without the CLI</h2>
+      </div>
+      <ol class="clicks">
+        <li><span class="ui">Gear icon</span> &rarr; <span class="ui">Developer Console</span> (a new window opens)</li>
+        <li>Menu <span class="ui">Debug</span> &rarr; <span class="ui">Open Execute Anonymous Window</span></li>
+        <li>Paste <code>System.debug(UserInfo.getSessionId());</code>, tick <span class="ui">Open Log</span>, click
+        <span class="ui">Execute</span></li>
+        <li>In the log, tick <span class="ui">Debug Only</span> at the bottom. The long string starting
+        <code>00D</code> is your token.</li>
+        <li>Your instance URL is in the browser address bar, with <code>lightning.force.com</code> replaced by
+        <code>my.salesforce.com</code>.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">This token dies with the session.</span>
+        <p>Log out, or leave it a few hours, and the CLM will report a <strong>401</strong>. Take a fresh one the same
+        way. For anything longer-lived you need a Connected App with OAuth, which is a different exercise.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8b -->
+  <div class="stp">
+    <div class="stp-n">8b</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">app manager</span><span class="eyebrow">10 min, then a 10 min wait</span></div>
+        <h2>Create the Connected App, so the CLM can sign in properly</h2>
+      </div>
+      <div class="prose">
+        <p>A pasted token dies with the session. A Connected App lets the CLM sign in through the org&rsquo;s own
+        login page and come back with a <strong>refresh token</strong>, so it renews itself and nobody pastes
+        anything again. This is the OAuth version.</p>
+      </div>
+      <ol class="clicks">
+        <li><span class="path">Setup &rarr; Quick Find: &ldquo;App Manager&rdquo;</span> &rarr; <span class="ui">New Connected App</span> (top right)
+          <ul class="clicks" style="margin-top:.5rem;"><li>If the page offers <em>Create a Connected App</em> vs <em>Create an External Client App</em>, choose <strong>Connected App</strong>.</li></ul>
+        </li>
+        <li><strong>Basic Information</strong>: Connected App Name <strong>FM CLM Demo</strong>, API Name <code>FM_CLM_Demo</code>, Contact Email &mdash; yours.</li>
+        <li>Tick <span class="ui">Enable OAuth Settings</span>. The section expands.</li>
+        <li><strong>Callback URL</strong> &mdash; one per line:
+          <pre style="margin-top:.5rem;">http://localhost:5173/
+https://noface07.github.io/CLM-POC/</pre>
+          <ul class="clicks" style="margin-top:.4rem;"><li>The trailing slash matters. Salesforce matches the callback exactly, and the CLM sends its root with the slash.</li></ul>
+        </li>
+        <li><strong>Selected OAuth Scopes</strong> &mdash; move these three across:
+          <em>Manage user data via APIs (api)</em>, <em>Perform requests at any time (refresh_token, offline_access)</em>,
+          <em>Access unique user identifiers (openid)</em>.</li>
+        <li>Tick <span class="ui">Require Proof Key for Code Exchange (PKCE)</span>.</li>
+        <li><strong>Untick</strong> <span class="ui">Require Secret for Web Server Flow</span> and
+        <strong>untick</strong> <span class="ui">Require Secret for Refresh Token Flow</span>.
+          <ul class="clicks" style="margin-top:.4rem;"><li>A browser cannot keep a secret, so a client that needs one is a client that has already leaked it. PKCE is the replacement. Leaving either ticked makes the sign-in fail with <code>invalid_client</code>.</li></ul>
+        </li>
+        <li><span class="ui">Save</span>, then <span class="ui">Continue</span>. Salesforce warns it can take up to ten minutes to take effect. It means it.</li>
+        <li>On the app&rsquo;s page, click <span class="ui">Manage Consumer Details</span>. Salesforce emails you a
+        verification code; enter it. Copy the <strong>Consumer Key</strong> (the long string starting <code>3MVG9</code>).
+        You do not need the secret.</li>
+        <li>Back on the app&rsquo;s page, <span class="ui">Manage</span> &rarr; <span class="ui">Edit Policies</span> &rarr;
+        set <strong>Refresh Token Policy</strong> to <em>Refresh token is valid until revoked</em> &rarr; <span class="ui">Save</span>.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">The ten minutes are real.</span>
+        <p>Clicking Connect before the app has propagated gives <code>error=invalid_client_id</code> on the
+        Salesforce login page. It is not a configuration mistake. Wait, then try again.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9 -->
+  <div class="stp">
+    <div class="stp-n">9</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-warn">in the clm project</span><span class="eyebrow">3 min</span></div>
+        <h2>Tell the dev server where your org is</h2>
+      </div>
+      <div class="prose">
+        <p>Before the panel can do anything, the dev server has to know the address to forward to. This is one file
+        and one restart, and it is where most people get stuck &mdash; because nothing warns you when it is missing.</p>
+      </div>
+      <ol class="clicks">
+        <li>In the <strong>project root</strong> &mdash; the folder with <code>package.json</code>, <em>not</em> the
+        <code>salesforce</code> folder &mdash; create a file named exactly <code>.env</code></li>
+        <li>Put two lines in it &mdash; your instance URL from step 8, and the consumer key from step 8b:
+          <pre style="margin-top:.5rem;">VITE_SALESFORCE_URL=https://yourorg.my.salesforce.com
+VITE_SF_CLIENT_ID=3MVG9…</pre>
+          <ul class="clicks" style="margin-top:.4rem;"><li>There is a <code>.env.example</code> in the project showing the shape. Neither value is a secret.</li></ul>
+        </li>
+        <li><strong>Stop the dev server and start it again.</strong> Ctrl+C in the terminal running
+        <code>npm run dev</code>, then <code>npm run dev</code>.</li>
+      </ol>
+      <div class="note bad col">
+        <span class="note-h">Vite reads .env once, at startup.</span>
+        <p>Editing it while the server runs changes nothing, and the failure is silent: the panel will keep calling
+        <code>login.salesforce.com</code>, which answers, but is not your org. If <em>Test connection</em> gives you
+        something strange after a correct token, this is almost always why.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10 -->
+  <div class="stp">
+    <div class="stp-n">10</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-warn">in the clm</span><span class="eyebrow">3 min</span></div>
+        <h2>Fill in the connection panel</h2>
+      </div>
+      <div class="prose">
+        <p>In the CLM, click <span class="ui">Salesforce &nearr;</span> in the top bar, then
+        <span class="ui">Integration settings</span>. Six fields, and only two of them are yours to change.</p>
+      </div>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Field</th><th>Set it to</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Mode</strong></td><td class="k">Live</td><td>Simulated is the fallback for a machine with no org; it never touches the network</td></tr>
+            <tr><td><strong>Authentication</strong></td><td class="k">Sign in with Salesforce</td><td>OAuth with a refresh token: renews itself, survives a reload. <em>Paste a session token</em> is the step-8 route and expires with the session.</td></tr>
+            <tr><td><strong>Consumer key</strong></td><td class="k">3MVG9…</td><td>Pre-filled from <code>.env</code>. Identifies the Connected App to Salesforce.</td></tr>
+            <tr><td><strong>Login URL</strong></td><td class="k">https://yourorg.my.salesforce.com</td><td>Pre-filled from <code>.env</code>. Where the browser is <em>sent</em> to sign in, so it must be the real address.</td></tr>
+            <tr><td><strong>Instance URL</strong></td><td class="k">/salesforce</td><td><strong>Leave this alone in dev.</strong> Where API <em>calls</em> go: the proxy path, which Vite forwards to <code>.env</code>.</td></tr>
+            <tr><td><strong>API version</strong></td><td class="k">v60.0</td><td>Any version your org supports. No reason to change it.</td></tr>
+            <tr><td><strong>Supplier object</strong></td><td class="k">Supplier_Onboarding__c</td><td>The table the supplier list is read from</td></tr>
+            <tr><td><strong>Status / ID fields</strong></td><td class="k">CLM_Contract_Status__c<br>CLM_Contract_Id__c</td><td>Written back on the onboarding record on every lifecycle change</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose"><p>Where each of these comes from in Salesforce, click by click, is the <strong>settings reference</strong> after step 11.</p></div>
+      <ol class="clicks">
+        <li>Click <span class="ui">Connect to Salesforce</span>. The org&rsquo;s login page opens; sign in; a page
+        asks whether to allow <em>FM CLM Demo</em> access &mdash; <span class="ui">Allow</span>. You are sent back to
+        the CLM, now showing <strong>Connected</strong> and your name.</li>
+        <li>Click <span class="ui">Test connection</span>.</li>
+        <li>Success reads: <em>&ldquo;Connected. Daily API requests: 14,987 of 15,000 remaining.&rdquo;</em> That
+        number is proof you reached a real org &mdash; nothing simulated could produce it.</li>
+        <li>Click <span class="ui">Refresh</span>. Your three suppliers appear, with <strong>Ferrow marked not
+        eligible</strong> and both missing prerequisites named. That is the gate reading live checkboxes.</li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">Instance URL confuses everyone once.</span>
+        <p>It looks wrong to leave <code>/salesforce</code> in a field labelled Instance URL. The browser calls
+        <code>/salesforce/services/data/v60.0/…</code> on your own dev server; Vite rewrites that to your org and
+        forwards it. That indirection is what avoids the browser&rsquo;s cross-origin rules in development.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 11 -->
+  <div class="stp">
+    <div class="stp-n">11</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-ok">the whole point</span><span class="eyebrow">10 min</span></div>
+        <h2>Drive the round trip</h2>
+      </div>
+      <div class="prose"><p>Two browser windows side by side: Salesforce on one, the CLM on the other.</p></div>
+      <ol class="clicks">
+        <li>In Salesforce, open <strong>FM Contracting &rarr; Supplier Onboarding &rarr; All</strong>, and open the
+        <strong>Meridian</strong> record.</li>
+        <li>Click <strong>Create Contract</strong>. The CLM opens on the Salesforce panel, says it is reading the
+        record, then lands in the draft studio with the supplier, company number, value, site and payment terms
+        already filled in from the org.</li>
+        <li>Click <span class="ui">Create draft</span>, then run the contract through: send to supplier, return a
+        redline from Supplier view, run change intelligence, decide the exceptions, sign both parties.</li>
+        <li>Back in Salesforce, open the <strong>CLM Contracts</strong> tab and refresh. There is a record with the
+        contract reference, the status climbing the picklist, the version moving, and <strong>PO Eligibility</strong>
+        ticking to true only once it is Executed.</li>
+        <li>Open the Meridian onboarding record again: <em>CLM Contract Id</em> and <em>CLM Contract Status</em> are
+        now filled in. The journey that offered the button shows what came of it.</li>
+      </ol>
+      <div class="note ok col">
+        <span class="note-h">Try the negative case too.</span>
+        <p>Open <strong>Ferrow</strong> in Salesforce and copy its Create Contract URL by hand &mdash; or untick a box
+        on Meridian after loading the page, then click the stale link. The CLM refuses and names the missing
+        prerequisites, because it re-runs the gate on arrival rather than trusting the link. A link that was valid
+        when the page was drawn is not the same as a supplier who is still eligible.</p>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+
+<!-- SETTINGS REFERENCE -->
+<section>
+  <div class="sec-head">
+    <h2>Where every setting comes from</h2>
+    <p class="col" style="color:var(--ink-2);">Each field on the connection panel: what it does, and the clicks that produce its value. For the day the <code>.env</code> is lost, the org is a different one, or somebody asks.</p>
+  </div>
+
+  <div class="steps">
+
+    <div class="stp">
+      <div class="stp-n">A</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Consumer key</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> Identifies the Connected App. When the browser arrives at the login page
+          carrying this key, Salesforce looks up <em>FM CLM Demo</em> and checks the callback URL and scopes against
+          what that app is allowed. It is not a secret: a PKCE public client carries it in the page by design, and
+          knowing it lets nobody in without also passing the org&rsquo;s login.</p>
+        </div>
+        <ol class="clicks">
+          <li><span class="path">Setup &rarr; Quick Find: &ldquo;App Manager&rdquo;</span></li>
+          <li>Find the row <strong>FM CLM Demo</strong>. Its type column says <em>Connected</em>.</li>
+          <li>Click the <span class="ui">&#9662;</span> at the far right of that row &rarr; <span class="ui">View</span></li>
+          <li>Under <em>API (Enable OAuth Settings)</em>, click <span class="ui">Manage Consumer Details</span></li>
+          <li>Salesforce emails a <strong>verification code</strong> to your login address. Enter it.</li>
+          <li>Copy <strong>Consumer Key</strong> &mdash; the long string beginning <code>3MVG9</code>. Ignore Consumer Secret; the CLM does not use one.</li>
+        </ol>
+        <div class="note col">
+          <span class="note-h">The verification email is the slow part.</span>
+          <p>It can take a minute and sometimes lands in spam. If you have the CLI, the same key comes back without
+          any email: <code>sf project retrieve start --metadata ConnectedApp:FM_CLM_Demo</code>, then read
+          <code>&lt;consumerKey&gt;</code> from the file it writes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">B</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Login URL</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> Your org&rsquo;s <em>My Domain</em>. The browser is sent here to sign in
+          and to the &ldquo;Allow access?&rdquo; page. Because it is a redirect rather than an API call, it cannot go
+          through the dev proxy &mdash; it has to be the real address. It is also what <code>VITE_SALESFORCE_URL</code>
+          is set to in <code>.env</code>.</p>
+        </div>
+        <ol class="clicks">
+          <li><span class="path">Setup &rarr; Quick Find: &ldquo;My Domain&rdquo;</span></li>
+          <li>Under <em>My Domain Details</em>, read <strong>Current My Domain URL</strong>. It looks like
+          <code>orgfarm-6a278698bc-dev-ed.develop.my.salesforce.com</code>.</li>
+          <li>Put <code>https://</code> in front of it. No trailing slash.</li>
+        </ol>
+        <div class="note col">
+          <span class="note-h">Or read it off the address bar.</span>
+          <p>Any Salesforce page&rsquo;s URL is the same host with <code>lightning.force.com</code> at the end. Swap
+          that for <code>my.salesforce.com</code> and you have it. The <code>.develop.</code> part stays.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">C</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Instance URL</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> Where API <em>calls</em> go &mdash; the supplier query, the token exchange,
+          the status writeback. Not the same thing as the Login URL, even though from a deployed site they hold the
+          same value.</p>
+        </div>
+        <ul class="clicks">
+          <li><strong>From <code>npm run dev</code>:</strong> leave it as <code>/salesforce</code>. That is a path on
+          your own dev server. Vite sees it, strips the prefix, and forwards the call to the address in
+          <code>.env</code>. The browser never talks to Salesforce directly, so its cross-origin rules never apply.</li>
+          <li><strong>From a deployed site:</strong> there is no Vite. Set it to the Login URL, and allowlist your
+          site&rsquo;s origin at <span class="path">Setup &rarr; Quick Find: &ldquo;CORS&rdquo; &rarr; New</span>,
+          e.g. <code>https://noface07.github.io</code>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">D</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>API version</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> Which release of the REST API the CLM speaks. Salesforce ships three a year
+          and keeps old ones working for many years, so the choice rarely matters: everything the CLM does &mdash;
+          SOQL, upsert by external id, the OAuth endpoints &mdash; has worked identically since long before
+          <code>v60.0</code>. Newer versions add things; they do not remove these.</p>
+        </div>
+        <ol class="clicks">
+          <li>While logged in, open a new browser tab at <code>https://&lt;your Login URL&gt;/services/data/</code></li>
+          <li>Salesforce answers with a list of every version the org supports. The last entry is the newest, e.g.
+          <code>"version": "65.0"</code>.</li>
+          <li>Use any of them as <code>vNN.0</code>. <code>v60.0</code> is a safe default for any org created after 2024.</li>
+        </ol>
+        <div class="note col">
+          <span class="note-h">When you would change it.</span>
+          <p>Only if a call fails with <em>&ldquo;The requested resource does not exist&rdquo;</em> on a fresh org that
+          is somehow older than v60 &mdash; which a Developer Edition or trial created today will not be.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">E</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Supplier object</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> The API name of the table the supplier list is read from and the status
+          pointer is written back to. It is a setting because blueprint §14 says the org&rsquo;s object model is
+          still to be validated; if onboarding ends up living somewhere else, this changes and the code does not.</p>
+        </div>
+        <ol class="clicks">
+          <li><span class="path">Setup &rarr; Quick Find: &ldquo;Object Manager&rdquo;</span> &rarr; click
+          <strong>Supplier Onboarding</strong></li>
+          <li>On the object&rsquo;s <em>Details</em> page, read <strong>API Name</strong>: <code>Supplier_Onboarding__c</code>.
+          The label is what a person sees; the API name is what code sends.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">F</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Status / ID fields written back</h3></div>
+        <div class="prose">
+          <p><strong>What they do.</strong> On every lifecycle transition the CLM writes two values onto the onboarding
+          record: the contract&rsquo;s reference and its current status. These are the API names of those two fields.
+          The fuller record &mdash; version, signature, PO eligibility &mdash; goes to <code>CLM_Contract__c</code> and
+          is not configurable, because its shape is the CLM&rsquo;s.</p>
+        </div>
+        <ol class="clicks">
+          <li><span class="path">Object Manager &rarr; Supplier Onboarding &rarr; Fields &amp; Relationships</span></li>
+          <li>Find <strong>CLM Contract Status</strong> and <strong>CLM Contract Id</strong>. The <em>Field Name</em>
+          column shows the API names: <code>CLM_Contract_Status__c</code> and <code>CLM_Contract_Id__c</code>.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="stp">
+      <div class="stp-n">G</div>
+      <div class="stp-b">
+        <div class="stp-h"><h3>Authentication</h3></div>
+        <div class="prose">
+          <p><strong>What it does.</strong> How the CLM proves who it is on every call. This one is a choice, not a
+          value from Salesforce.</p>
+        </div>
+        <ul class="clicks">
+          <li><strong>Sign in with Salesforce</strong> &mdash; OAuth through the Connected App. The org issues an access
+          token and a refresh token; when the access token expires the CLM swaps the refresh token for a new one and
+          retries, so a 401 is never seen. The connection survives a reload and is revoked at the org by
+          <em>Disconnect</em>.</li>
+          <li><strong>Paste a session token</strong> &mdash; the step-8 route. Fast, needs no Connected App, dies with
+          the session. Fine for building; the other one is for demoing.</li>
+        </ul>
+        <div class="note bad col">
+          <span class="note-h">What neither option changes.</span>
+          <p>The access token lives in the browser, readable by anything on the page. OAuth removes the need for a
+          client secret; it does not move the token to a server. Enough to prove the integration against an org you
+          own; in production the call and the credential belong on a server.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- CONNECTION TROUBLE -->
+<section>
+  <div class="sec-head">
+    <h2>When the connection will not come up</h2>
+    <p class="col" style="color:var(--ink-2);">In the order they actually happen.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>What the CLM says</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td class="k">No access token</td><td>The field is empty</td><td>Step 8, then paste it</td></tr>
+        <tr><td class="k">401 · Salesforce rejected the token</td><td>Expired, or from a different org</td><td>In token mode: take a fresh one. In OAuth mode this is handled for you; if you see it anyway, Disconnect and sign in again.</td></tr>
+        <tr><td class="k">error=invalid_client_id on the login page</td><td>The Connected App has not propagated yet, or the consumer key is wrong</td><td>Wait ten minutes. Then compare the key in <code>.env</code> to Manage Consumer Details.</td></tr>
+        <tr><td class="k">error=redirect_uri_mismatch</td><td>The callback list does not contain exactly what the CLM sent</td><td>Add <code>http://localhost:5173/</code> with the trailing slash</td></tr>
+        <tr><td class="k">invalid_client · secret required</td><td>&ldquo;Require Secret for Web Server Flow&rdquo; is still ticked</td><td>Step 8b, item 7</td></tr>
+        <tr><td class="k">Sign-in state did not match</td><td>The login was started in a different tab, or the page was reloaded mid-flow</td><td>Click Connect again from the same tab</td></tr>
+        <tr><td class="k">Connected, but Refresh returns nothing</td><td>Supplier object still says <code>Account</code></td><td>Set it to <code>Supplier_Onboarding__c</code></td></tr>
+        <tr><td class="k">INVALID_FIELD: No such column</td><td>A field name differs from the API name the CLM queries, or the permission set is not assigned</td><td>Check the exact API name in Object Manager; then step 4</td></tr>
+        <tr><td class="k">Rows come back with blank details</td><td>Field-level security</td><td>Step 4 — assign the permission set to yourself</td></tr>
+        <tr><td class="k">Suppliers listed but all show as eligible</td><td>The four checkboxes were not read</td><td>Confirm all four exist with the exact API names in step 2</td></tr>
+        <tr><td class="k">Something answered, but it is not your data</td><td><code>.env</code> missing or the server was not restarted</td><td>Step 9 — and restart <code>npm run dev</code></td></tr>
+        <tr><td class="k">CORS / blocked by policy</td><td>You are on a deployed URL, not <code>npm run dev</code></td><td>Below</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:.5rem;">Running from a deployed URL rather than dev</h3>
+  <div class="prose">
+    <p>In development the Vite proxy means the browser never talks to Salesforce directly. On a deployed site there is
+    no proxy, and Salesforce refuses calls from an origin it does not know. Two things then become necessary:</p>
+  </div>
+  <ol class="clicks">
+    <li><span class="path">Setup &rarr; Quick Find: &ldquo;CORS&rdquo;</span> &rarr; <span class="ui">New</span> &rarr;
+    add your site&rsquo;s origin, e.g. <code>https://noface07.github.io</code></li>
+    <li>Set the CLM&rsquo;s <strong>Instance URL</strong> to your real org address instead of <code>/salesforce</code>,
+    since there is no proxy to hand it to.</li>
+    <li>Update the <strong>Create Contract</strong> formula (step 3) to point at the deployed address.</li>
+  </ol>
+  <div class="note bad col">
+    <span class="note-h">The caveat the panel states, restated.</span>
+    <p>A token in a browser tab is readable by anything running on that page, and Salesforce&rsquo;s CORS allowlist
+    does not change that. This shape is enough to prove the integration against your own org and is
+    <strong>not enough to ship</strong>: in production the call and the credential belong on a server. That is worth
+    saying out loud when you demo it, rather than being asked.</p>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section>
+  <div class="sec-head">
+    <h2>The same result, both ways</h2>
+    <p class="col" style="color:var(--ink-2);">Worth knowing what the trade actually is before choosing a path in a new org.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th></th><th>By hand</th><th>By deploy</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Time</strong></td><td>2&ndash;3 hours</td><td>About 4 minutes</td></tr>
+        <tr><td><strong>Repeatable</strong></td><td>No &mdash; every org is a fresh 2 hours</td><td>Yes &mdash; same files, any org</td></tr>
+        <tr><td><strong>Typos</strong></td><td>40 fields × 4 screens is a lot of chances</td><td>Impossible: the files are the source</td></tr>
+        <tr><td><strong>Needs</strong></td><td>A browser</td><td>Node, the CLI, and a login</td></tr>
+        <tr><td><strong>Version control</strong></td><td>None</td><td>The org's shape is in git</td></tr>
+        <tr><td><strong>Good for</strong></td><td>Locked-down orgs; showing someone how it works; changing one field</td><td>Everything else</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>The honest recommendation: <strong>use the deploy, and keep this guide for the org where you cannot.</strong>
+    If you build by hand and want the files afterwards, one command retrieves them:</p>
+  </div>
+  <pre style="border-left-color:var(--clm);">sf project retrieve start --metadata CustomObject:Supplier_Onboarding__c,CustomObject:CLM_Contract__c --target-org clmdemo</pre>
+</section>
+
+<footer>
+  <p>Companion to <em>Salesforce Round Trip</em>, which covers the same setup by command line. Field names, lengths
+  and picklist values here are read directly out of the metadata deployed in the org, so the two documents cannot
+  disagree.</p>
+  <p>FM AI-CLM POC · blueprint v1.0 §6.1, §6.3, §6.10 · CLM demo at <code class="mono">d8ce4b1</code>.</p>
+</footer>
+
+</div>
+</body>
+</html>

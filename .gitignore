@@ -3,3 +3,10 @@ dist/
 .selftest/
 *.local
 .DS_Store
+.env
+.env.*
+!.env.example
+
+# Salesforce CLI local state: org aliases and source-tracking, per machine
+salesforce/.sf/
+salesforce/.sfdx/

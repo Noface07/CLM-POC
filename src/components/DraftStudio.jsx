@@ -10,6 +10,7 @@ import {
   buildDraft, fieldsForTemplate, defaultValuesForTemplate, unresolvedTokens,
   templateIsDraftable, TOKEN_FIELDS, DEMO_WORDING_NOTICE,
 } from "../data/templates.js";
+import { SALESFORCE_SOURCED, SALESFORCE_DERIVED } from "../lib/salesforce.js";
 import { downloadDocx } from "../lib/docx.js";
 import { downloadPdf } from "../lib/pdf.js";
 import { Tag, Btn, Field, GREEN, AMBER, RED, GRAY, kicker } from "../lib/ui.jsx";
@@ -45,12 +46,16 @@ export default function DraftStudio({
     ...salesforceContext,
   }));
 
-  // Which fields arrived from the CRM rather than being typed here.
-  const fromSalesforce = new Set(
+  // Which fields arrived from the CRM rather than being typed here, and of those, which
+  // were read as-is and which were worked out from what the CRM said. Both are prefilled;
+  // only the first is labelled "Salesforce", because a rule's output is a suggestion.
+  const present = new Set(
     Object.entries(salesforceContext || {})
       .filter(([, v]) => v !== "" && v != null)
       .map(([key]) => key)
   );
+  const fromSalesforce = new Set([...present].filter((k) => SALESFORCE_SOURCED.includes(k)));
+  const derivedFromSalesforce = new Set([...present].filter((k) => SALESFORCE_DERIVED.includes(k)));
 
   const template = TEMPLATE_BY_CODE[templateCode];
   const agreementType = AGREEMENT_TYPE_BY_CODE[agreementTypeCode];
@@ -60,6 +65,7 @@ export default function DraftStudio({
   // The CRM carries more context than this template has fields for, and only the
   // fields actually on screen get the marker, so count those rather than the context.
   const markedCount = fields.filter((f) => fromSalesforce.has(f.name)).length;
+  const derivedCount = fields.filter((f) => derivedFromSalesforce.has(f.name)).length;
 
   const doc = useMemo(
     () => buildDraft(templateCode, values, { evergreen, version: "v0.1", status: "Preview" }),
@@ -108,7 +114,8 @@ export default function DraftStudio({
           <span>
             Opened from Salesforce with <strong>{salesforceRecord.Name}</strong>&apos;s context
             {salesforceRecord.Supplier_Onboarding_Id__c && <> · onboarding record {salesforceRecord.Supplier_Onboarding_Id__c}</>}
-            {" "}· {markedCount} field{markedCount === 1 ? "" : "s"} carried across and marked below.
+            {" "}· {markedCount} field{markedCount === 1 ? "" : "s"} carried across
+            {derivedCount > 0 && <> and {derivedCount} more inferred from them</>}, marked below.
             Agreement type, template and dates are yours to choose. The CRM does not hold them.
           </span>
         </div>
@@ -233,7 +240,9 @@ export default function DraftStudio({
                         label={
                           fromSalesforce.has(field.name)
                             ? <>{field.label} <span className="clm-src">Salesforce</span></>
-                            : field.label
+                            : derivedFromSalesforce.has(field.name)
+                              ? <>{field.label} <span className="clm-src clm-src-derived" title="Worked out from what Salesforce holds. Change it if the rule guessed wrong.">from Salesforce, inferred</span></>
+                              : field.label
                         }
                         hint={disabled ? "Not used, evergreen contract" : undefined}
                       >
