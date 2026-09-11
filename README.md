@@ -1,4 +1,4 @@
-# FM Supplier CLM demo
+# FM Supplier CLM demo 
 
 A working contract lifecycle demo for facilities management: draft a contract from the catalogue,
 negotiate it as a Word document with tracked changes, decide each change against the clause
