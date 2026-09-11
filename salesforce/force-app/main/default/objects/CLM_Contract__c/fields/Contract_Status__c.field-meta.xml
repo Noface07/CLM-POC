@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Contract_Status__c</fullName>
+    <externalId>false</externalId>
+    <label>Contract Status</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+                <value>
+                    <fullName>Draft</fullName>
+                    <default>false</default>
+                    <label>Draft</label>
+                </value>
+                <value>
+                    <fullName>Internal Review</fullName>
+                    <default>false</default>
+                    <label>Internal Review</label>
+                </value>
+                <value>
+                    <fullName>In Negotiation</fullName>
+                    <default>false</default>
+                    <label>In Negotiation</label>
+                </value>
+                <value>
+                    <fullName>Exception Review</fullName>
+                    <default>false</default>
+                    <label>Exception Review</label>
+                </value>
+                <value>
+                    <fullName>Approved</fullName>
+                    <default>false</default>
+                    <label>Approved</label>
+                </value>
+                <value>
+                    <fullName>Ready for Signature</fullName>
+                    <default>false</default>
+                    <label>Ready for Signature</label>
+                </value>
+                <value>
+                    <fullName>Signature Pending</fullName>
+                    <default>false</default>
+                    <label>Signature Pending</label>
+                </value>
+                <value>
+                    <fullName>Executed</fullName>
+                    <default>false</default>
+                    <label>Executed</label>
+                </value>
+                <value>
+                    <fullName>Active</fullName>
+                    <default>false</default>
+                    <label>Active</label>
+                </value>
+                <value>
+                    <fullName>Amendment in Progress</fullName>
+                    <default>false</default>
+                    <label>Amendment in Progress</label>
+                </value>
+                <value>
+                    <fullName>Renewal in Progress</fullName>
+                    <default>false</default>
+                    <label>Renewal in Progress</label>
+                </value>
+                <value>
+                    <fullName>Expiring</fullName>
+                    <default>false</default>
+                    <label>Expiring</label>
+                </value>
+                <value>
+                    <fullName>Expired</fullName>
+                    <default>false</default>
+                    <label>Expired</label>
+                </value>
+                <value>
+                    <fullName>Termination in Progress</fullName>
+                    <default>false</default>
+                    <label>Termination in Progress</label>
+                </value>
+                <value>
+                    <fullName>Terminated</fullName>
+                    <default>false</default>
+                    <label>Terminated</label>
+                </value>
+                <value>
+                    <fullName>Cancelled</fullName>
+                    <default>false</default>
+                    <label>Cancelled</label>
+                </value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>

@@ -1,4 +1,4 @@
-import { buildDraft, unresolvedTokens, docToPlainText, templateIsDraftable, resolvedClauseWording } from "../src/data/templates.js";
+import { buildDraft, unresolvedTokens, docToPlainText, templateIsDraftable, resolvedClauseWording, TOKEN_FIELDS } from "../src/data/templates.js";
 import { TEMPLATES, PLAYBOOK, CLAUSE_BY_CODE } from "../src/data/catalogue.js";
 import {
   applyRedline, resolveChanges, deriveFindings, pendingChangeCount, diffToRuns,
@@ -16,7 +16,7 @@ import { MOCK_OBLIGATIONS } from "../src/lib/ai.js";
 import { buildDocx } from "../src/lib/docx.js";
 import { makeZip } from "../src/lib/zip.js";
 import { contractVisibility, visibleContracts, roleCanActOnException, ROLES } from "../src/lib/rbac.js";
-import { SIM_ORG, ONBOARDING_PREREQS, eligibility, contextFor as sfContext, SALESFORCE_SOURCED, listSuppliers, pushMilestone, SALESFORCE_DEFAULTS } from "../src/lib/salesforce.js";
+import { SIM_ORG, ONBOARDING_PREREQS, eligibility, contextFor as sfContext, SALESFORCE_SOURCED, SALESFORCE_DERIVED, listSuppliers, pushMilestone, SALESFORCE_DEFAULTS, flattenOnboarding } from "../src/lib/salesforce.js";
 import { DEFAULT_APPROVAL_MATRIX, APPROVER_POOL, ROUTE_DESKS, routeMapFrom, escalationFrom, mustEscalate } from "../src/data/contracts.js";
 import { PORTFOLIO } from "../src/data/contracts.js";
 import { importDocx } from "../src/lib/docx-import.js";
@@ -29,13 +29,22 @@ import {
   monitorSummary, performanceRecord, sweep, applyLapse, isDeadline, amendmentImpact,
 } from "../src/lib/monitoring.js";
 import { buildPdf } from "../src/lib/pdf.js";
-import { readSnapshot, writeSnapshot, clearSnapshot, SCHEMA, PERSIST_KEY } from "../src/lib/session.js";
+import {
+  readSnapshot, writeSnapshot, clearSnapshot, SCHEMA, PERSIST_KEY,
+  readContractSnapshot, writeContractSnapshot, removeContractSnapshot, listContractSessions,
+  clearAllSessions, newSessionId, contractKey, migrate,
+} from "../src/lib/session.js";
 import {
   makeEntry as makeAuditEntry, actorFor, actorLabel, formatAuditTime, newestFirst,
   filterEntries, rolesIn, contractsIn, auditToCsv, AUDIT_CSV_HEADER,
   forContract, contractLabel, UNSCOPED,
 } from "../src/lib/audit.js";
 import { canReadAudit } from "../src/lib/rbac.js";
+import {
+  readOAuth, writeOAuth, clearOAuth, isSignedIn, randomVerifier, challengeFor, redirectUriFor,
+  beginLogin, pendingCallback, completeLogin, refreshAccessToken, signOut,
+} from "../src/lib/sfauth.js";
+import { oauthEndpoints, testConnection } from "../src/lib/salesforce.js";
 import {
   computeApprovalStatus, computeContractStatus, reviewNeedsReapproval, invalidationSatisfied,
 } from "../src/lib/lifecycle.js";
@@ -493,18 +502,55 @@ async function main() {
 
   const sfCtx = sfContext(ready);
   check("Salesforce context carries the commercial and party fields",
-    Boolean(sfCtx.supplier_name && sfCtx.client_entity && sfCtx.contract_value && sfCtx.currency_code));
+    Boolean(sfCtx.supplier_name && sfCtx.legal_entity_name && sfCtx.contract_value && sfCtx.currency_code));
   check("Salesforce context does not carry user-sourced fields",
     !("agreement_type" in sfCtx) && !("template_code" in sfCtx) && !("start_date" in sfCtx) && !("end_date" in sfCtx));
-  check("every context key is declared as Salesforce-sourced",
-    Object.keys(sfCtx).every((k) => SALESFORCE_SOURCED.includes(k)),
-    Object.keys(sfCtx).filter((k) => !SALESFORCE_SOURCED.includes(k)).join(","));
+  check("every context key is declared as either sourced or derived",
+    Object.keys(sfCtx).every((k) => SALESFORCE_SOURCED.includes(k) || SALESFORCE_DERIVED.includes(k)),
+    Object.keys(sfCtx).filter((k) => !SALESFORCE_SOURCED.includes(k) && !SALESFORCE_DERIVED.includes(k)).join(","));
+  check("no key is claimed as both", !SALESFORCE_SOURCED.some((k) => SALESFORCE_DERIVED.includes(k)));
   check("payment terms are parsed to a number of days", /^\d+$/.test(sfCtx.payment_terms_days));
 
-  const sim = await listSuppliers(SALESFORCE_DEFAULTS);
-  check("the simulated org answers without a network", sim.simulated === true && sim.records.length >= 2);
+  // The keys have to be the template's own names, or the value is fetched, shown, and
+  // then silently replaced by the demo supplier's. Three fields lived in that state.
+  const templateKeys = new Set(Object.keys(TOKEN_FIELDS));
+  const contextKeysMeantForTheTemplate = Object.keys(sfCtx).filter((k) => !["business_owner", "contract_owner", "country"].includes(k));
+  const orphanKeys = contextKeysMeantForTheTemplate.filter((k) => !templateKeys.has(k));
+  check("every context key the template is meant to consume is a real template field", orphanKeys.length === 0,
+    orphanKeys.length ? "orphaned: " + orphanKeys.join(", ") : "none");
+  for (const k of ["supplier_registered_number", "legal_entity_name", "facility_names", "supplier_contact"]) {
+    check(`${k} is filled from the org, not the demo default`, Boolean(sfCtx[k]), String(sfCtx[k]));
+  }
 
-  const stamp = await pushMilestone(SALESFORCE_DEFAULTS, ready, {
+  // The bug, reproduced: a different supplier must not come through wearing Meridian's details.
+  const calder = SIM_ORG.find((r) => /Calder/.test(r.Name));
+  const calderCtx = sfContext(calder);
+  check("Calder's company number is Calder's", calderCtx.supplier_registered_number === "07733114", calderCtx.supplier_registered_number);
+  check("Calder's site is Calder's, not Riverside", calderCtx.facility_names === "Northgate Distribution Park", calderCtx.facility_names);
+  check("Calder's contact is Calder's", /Vance/.test(calderCtx.supplier_contact || ""), calderCtx.supplier_contact);
+
+  // Derived values: produced by a rule from org data, and said so.
+  check("the title is built from category and site",
+    calderCtx.title === "Technical Maintenance Services - Northgate Distribution Park", calderCtx.title);
+  check("governing law follows the country", sfCtx.governing_law === "England and Wales" && sfCtx.jurisdiction === "England and Wales");
+  check("a country with no rule leaves law blank rather than guessing",
+    sfContext({ ...ready, BillingCountry: "Atlantis" }).governing_law === "");
+  check("our legal entity's number and address come from what we know of it",
+    sfCtx.legal_entity_registered_number === "04412907" && /Riverside Way/.test(sfCtx.legal_entity_address));
+  check("an entity we do not know leaves them blank",
+    sfContext({ ...ready, Legal_Entity__c: "Some Other Entity Ltd" }).legal_entity_registered_number === "");
+  check("what is derived is marked derived", ["title", "governing_law", "legal_entity_address"].every((k) => SALESFORCE_DERIVED.includes(k)));
+
+  // Explicitly simulated. The default mode follows .env now -- live when an org is
+  // configured -- and a test that leans on the default reads differently on every machine.
+  const SIMULATED = { ...SALESFORCE_DEFAULTS, mode: "simulated" };
+  const sim = await listSuppliers(SIMULATED);
+  check("the simulated org answers without a network", sim.simulated === true && sim.records.length >= 2);
+  check("the default mode is live when an org is configured, simulated otherwise",
+    SALESFORCE_DEFAULTS.mode === ((SALESFORCE_DEFAULTS.clientId || SALESFORCE_DEFAULTS.loginUrl !== "https://login.salesforce.com") ? "live" : "simulated"),
+    `mode=${SALESFORCE_DEFAULTS.mode}`);
+
+  const stamp = await pushMilestone(SIMULATED, ready, {
     contractId: "CTR-2026-04821", status: "Active", milestone: "Executed and active",
   });
   check("a milestone push records contract, status and record",
@@ -1352,6 +1398,353 @@ async function main() {
     envelope: {}, anyReviewerActed: true,
   });
   check("an executed envelope makes the contract Active", contractLive === "Active");
+
+
+  // ---- Reading a live onboarding record ----
+  //
+  // Salesforce returns the supplier nested under Account__r. That shape stops at
+  // flattenOnboarding: everything downstream keeps reading the flat shape SIM_ORG
+  // defines, so which object onboarding lives on is a decision one function holds.
+  const sfRow = {
+    Id: "a0Xfj000001AbCdEAK",
+    Name: "ONB-2026-0000",
+    Account__c: "001fj00000XyZwAAAV",
+    Account__r: {
+      Name: "Meridian Cleaning & Technical Services Ltd.",
+      BillingStreet: "Unit 4, Fairfax Industrial Park, Reading RG2 0TD",
+      BillingCountry: "United Kingdom",
+    },
+    Onboarding_Status__c: "Approved - Ready to Contract",
+    Qualification_Complete__c: true,
+    Insurance_Verified__c: true,
+    Bank_Verified__c: true,
+    Sanctions_Cleared__c: true,
+    Service_Category__c: "Integrated FM",
+    Facility_Site__c: "Riverside Corporate Campus - Building C",
+    Legal_Entity__c: "Meridian FM Services (UK) Ltd",
+    Business_Owner__c: "R. Ashworth",
+    Procurement_Owner__c: "D. Whitfield",
+    Company_Number__c: "08841221",
+    Contract_Value__c: 486000,
+    Payment_Terms__c: "45 days from invoice",
+  };
+  const flat = flattenOnboarding(sfRow);
+
+  check("the supplier name is lifted out of the nested Account", flat.Name === sfRow.Account__r.Name);
+  check("and so is the address the contract prints", flat.BillingStreet === sfRow.Account__r.BillingStreet);
+  check("the onboarding record's own id is kept", flat.Id === sfRow.Id,
+    "this is the record status is written back to");
+  check("and the supplier's id separately", flat.AccountId === sfRow.Account__c,
+    "this is the record a contract belongs to; conflating them files contracts against a journey");
+  check("the auto-number Name becomes the onboarding reference",
+    flat.Supplier_Onboarding_Id__c === "ONB-2026-0000");
+
+  check("the four checkboxes become the prereqs the gate reads",
+    flat.prereqs.qualified && flat.prereqs.insuranceVerified
+    && flat.prereqs.bankVerified && flat.prereqs.sanctionsCleared);
+  check("so a fully onboarded supplier passes the gate", eligibility(flat).eligible);
+
+  const blockedRow = { ...sfRow, Insurance_Verified__c: false, Sanctions_Cleared__c: false };
+  const blockedFlat = flattenOnboarding(blockedRow);
+  check("an unticked prerequisite is false, not missing", blockedFlat.prereqs.insuranceVerified === false);
+  check("and the gate refuses", !eligibility(blockedFlat).eligible);
+  check("naming exactly what is outstanding", eligibility(blockedFlat).missing.length === 2,
+    eligibility(blockedFlat).missing.map((m) => m.key).join(","));
+
+  // The bug this replaced: prereqs was hard-coded null, so the gate could not run at all.
+  check("a record with no prereqs recorded is not treated as passing",
+    !eligibility({ ...flat, prereqs: null }).eligible,
+    "no answer and a good answer are different things");
+
+  // The flattened shape has to satisfy contextFor unchanged, or live mode drafts blanks.
+  const liveCtx = sfContext(flat);
+  for (const key of SALESFORCE_SOURCED) {
+    if (key === "supplier_contact") continue;   // the stub row below does not set Primary_Contact__c
+    check(`live context carries ${key}`, liveCtx[key] !== undefined && liveCtx[key] !== null && liveCtx[key] !== "",
+      String(liveCtx[key]));
+  }
+  check("payment terms are parsed to a number of days", liveCtx.payment_terms_days === "45");
+  check("currency defaults where the org has no multi-currency", flat.CurrencyIsoCode === "GBP");
+
+  // Simulated and live have to present the same fields, or switching mode changes the demo.
+  const simKeys = Object.keys(SIM_ORG[0]).filter((k) => k !== "prereqs").sort();
+  const liveKeys = Object.keys(flat).filter((k) => k !== "prereqs" && k !== "live").sort();
+  const missingFromLive = simKeys.filter((k) => !liveKeys.includes(k));
+  check("every simulated field is present on a live record", missingFromLive.length === 0,
+    missingFromLive.join(",") || "none");
+  check("and the simulated records carry the supplier id live ones do",
+    SIM_ORG.every((r) => typeof r.AccountId === "string" && r.AccountId.length > 0));
+
+  check("the default object is the onboarding record, not the customer master",
+    SALESFORCE_DEFAULTS.supplierObject === "Supplier_Onboarding__c");
+
+
+  // ---- Signing in to Salesforce: PKCE and the token flow ----
+  //
+  // Everything here runs without a window. The flow takes storage, navigation, location
+  // and fetch as arguments, so the whole round trip is exercised against fakes, and the
+  // one thing that has to be right cryptographically is checked against the RFC's own
+  // test vector rather than against itself.
+  const memStore = () => {
+    const m = new Map();
+    return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+  };
+
+  // RFC 7636 appendix B.
+  check("the PKCE challenge matches the RFC 7636 test vector",
+    (await challengeFor("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")) === "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+  const v = randomVerifier();
+  check("a verifier is 64 characters", v.length === 64);
+  check("and uses only the unreserved set", /^[A-Za-z0-9\-_]+$/.test(v));
+  check("two verifiers differ", randomVerifier() !== randomVerifier());
+
+  const tokenStore = memStore();
+  check("nothing stored reads as signed out", !isSignedIn(tokenStore) && readOAuth(tokenStore) === null);
+  writeOAuth({ accessToken: "a1", refreshToken: "r1" }, tokenStore);
+  check("a stored refresh token reads as signed in", isSignedIn(tokenStore));
+  clearOAuth(tokenStore);
+  check("clearing signs out", !isSignedIn(tokenStore));
+
+  check("the redirect URI is the app's root with a trailing slash",
+    redirectUriFor({ href: "http://localhost:5173/#sf?onb=1" }) === "http://localhost:5173/");
+  check("and under a sub-path it is that sub-path",
+    redirectUriFor({ href: "https://noface07.github.io/CLM-POC/index.html" }) === "https://noface07.github.io/CLM-POC/");
+
+  // Begin: parks the verifier and state, sends the browser to authorize.
+  const pending = memStore();
+  let sentTo = null;
+  await beginLogin(
+    { loginUrl: "https://org.my.salesforce.com/", clientId: "KEY", redirectUri: "http://localhost:5173/", returnTo: "#sf?onb=X" },
+    { storage: pending, navigate: (u) => { sentTo = u; } }
+  );
+  const authUrl = new URL(sentTo);
+  check("sign-in goes to the org's authorize endpoint", authUrl.origin + authUrl.pathname === "https://org.my.salesforce.com/services/oauth2/authorize");
+  check("as an authorization-code request", authUrl.searchParams.get("response_type") === "code");
+  check("with PKCE S256", authUrl.searchParams.get("code_challenge_method") === "S256" && authUrl.searchParams.get("code_challenge")?.length > 40);
+  check("asking for a refresh token", authUrl.searchParams.get("scope").includes("refresh_token"));
+  const parked = JSON.parse(pending.getItem("clm-sf-oauth-pending"));
+  check("the verifier and state are parked for the return trip", parked.verifier && parked.state === authUrl.searchParams.get("state"));
+  check("and the link that was interrupted is kept", parked.returnTo === "#sf?onb=X");
+  check("the challenge sent is the challenge of the verifier parked",
+    (await challengeFor(parked.verifier)) === authUrl.searchParams.get("code_challenge"));
+
+  check("a URL with code and state is a callback", pendingCallback({ search: "?code=abc&state=xyz" }));
+  check("a URL with an error is also a callback, to be reported", pendingCallback({ search: "?error=access_denied" }));
+  check("a plain URL is not", !pendingCallback({ search: "" }));
+
+  // Complete: the wrong state is refused before any network.
+  let exchanged = 0;
+  const fakeToken = async (url, init) => {
+    exchanged++;
+    const body = new URLSearchParams(init.body);
+    if (body.get("grant_type") === "authorization_code" && body.get("code") === "GOODCODE" && body.get("code_verifier") === parked.verifier) {
+      return { ok: true, json: async () => ({ access_token: "AT1", refresh_token: "RT1", instance_url: "https://org.my.salesforce.com", id: "https://login/id/00D/005" }) };
+    }
+    if (body.get("grant_type") === "refresh_token" && body.get("refresh_token") === "RT1") {
+      return { ok: true, json: async () => ({ access_token: "AT2", instance_url: "https://org.my.salesforce.com" }) };
+    }
+    return { ok: false, status: 400, json: async () => ({ error: "invalid_grant", error_description: "refused" }) };
+  };
+  const cfg = { tokenUrl: "https://org.my.salesforce.com/services/oauth2/token", clientId: "KEY", redirectUri: "http://localhost:5173/" };
+
+  const badState = memStore(); badState.setItem("clm-sf-oauth-pending", JSON.stringify(parked));
+  let stateErr = null;
+  try { await completeLogin(cfg, { storage: badState, tokenStore, location: { search: "?code=GOODCODE&state=WRONG" }, fetch: fakeToken }); } catch (e) { stateErr = e.message; }
+  check("a state we did not issue is refused", /state did not match/i.test(stateErr || ""));
+  check("and refused before the code is exchanged", exchanged === 0, "a code with a foreign state is somebody else's sign-in");
+  check("and the parked sign-in is spent either way", badState.getItem("clm-sf-oauth-pending") === null);
+
+  let noStartErr = null;
+  try { await completeLogin(cfg, { storage: memStore(), tokenStore, location: { search: "?code=GOODCODE&state=" + parked.state }, fetch: fakeToken }); } catch (e) { noStartErr = e.message; }
+  check("a callback with nothing parked is refused", /not started from this browser tab/i.test(noStartErr || ""));
+
+  let deniedErr = null;
+  try { await completeLogin(cfg, { storage: memStore(), tokenStore, location: { search: "?error=access_denied&error_description=user+cancelled" }, fetch: fakeToken }); } catch (e) { deniedErr = e.message; }
+  check("the org refusing is reported in its own words", /user cancelled/.test(deniedErr || ""));
+
+  // Complete: the happy path.
+  const goodPending = memStore(); goodPending.setItem("clm-sf-oauth-pending", JSON.stringify(parked));
+  const done = await completeLogin(cfg, { storage: goodPending, tokenStore, location: { search: "?code=GOODCODE&state=" + parked.state }, fetch: fakeToken });
+  check("the code is exchanged once", exchanged === 1);
+  check("tokens come back", done.tokens.accessToken === "AT1" && done.tokens.refreshToken === "RT1");
+  check("and are stored", readOAuth(tokenStore)?.accessToken === "AT1");
+  check("the interrupted link comes back with them", done.returnTo === "#sf?onb=X");
+  check("the org told us where it lives", done.tokens.instanceUrl === "https://org.my.salesforce.com");
+  check("the sign-in is now spent", goodPending.getItem("clm-sf-oauth-pending") === null);
+
+  // Refresh: a new access token, same refresh token.
+  const refreshed = await refreshAccessToken(cfg, { tokenStore, fetch: fakeToken });
+  check("refreshing yields a new access token", refreshed.accessToken === "AT2");
+  check("and keeps the refresh token", readOAuth(tokenStore)?.refreshToken === "RT1");
+
+  // Refresh failing means the session is over: forget it rather than loop on it.
+  writeOAuth({ accessToken: "AT2", refreshToken: "DEAD" }, tokenStore);
+  let deadErr = null;
+  try { await refreshAccessToken(cfg, { tokenStore, fetch: fakeToken }); } catch (e) { deadErr = e.message; }
+  check("a dead refresh token is reported as the session ending", /session ended/i.test(deadErr || ""));
+  check("and forgotten, so the panel offers sign-in instead of retrying", !isSignedIn(tokenStore));
+
+  // Sign out revokes at the org and forgets locally, in that order of importance.
+  writeOAuth({ accessToken: "AT3", refreshToken: "RT3" }, tokenStore);
+  let revoked = null;
+  await signOut({ revokeUrl: "https://org/revoke" }, { tokenStore, fetch: async (u, i) => { revoked = new URLSearchParams(i.body).get("token"); return { ok: true }; } });
+  check("disconnecting revokes the refresh token at the org", revoked === "RT3");
+  check("and forgets it locally", !isSignedIn(tokenStore));
+  writeOAuth({ accessToken: "AT4", refreshToken: "RT4" }, tokenStore);
+  await signOut({ revokeUrl: "https://org/revoke" }, { tokenStore, fetch: async () => { throw new Error("offline"); } });
+  check("an unreachable org still ends the local session", !isSignedIn(tokenStore),
+    "the part that matters to the person clicking Disconnect is that it is gone from here");
+
+  // The endpoints are derived from the same base as the data API, so the dev proxy covers them.
+  const eps = oauthEndpoints({ instanceUrl: "/salesforce", loginUrl: "https://org.my.salesforce.com", clientId: "KEY" });
+  check("the token endpoint goes through the proxy path", eps.tokenUrl === "/salesforce/services/oauth2/token");
+  check("but the login URL is the real org, because a redirect cannot be proxied", eps.loginUrl === "https://org.my.salesforce.com");
+
+
+  // ---- A 401 in OAuth mode is handled, not shown ----
+  //
+  // This is the whole payoff of the refresh token. The API client sees the 401, trades
+  // the refresh token for a new access token, and retries once. The person using the
+  // demo sees a result. In token mode the same 401 is the error it always was.
+  {
+    const savedFetch = globalThis.fetch;
+    const savedLS = globalThis.localStorage;
+    const ls = memStore();
+    globalThis.localStorage = ls;
+    writeOAuth({ accessToken: "STALE", refreshToken: "RT-LIVE" }, ls);
+
+    const calls = [];
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), auth: init.headers?.Authorization || null, body: init.body || null });
+      if (String(url).endsWith("/services/oauth2/token")) {
+        return { ok: true, json: async () => ({ access_token: "FRESH", instance_url: "https://org" }) };
+      }
+      if (init.headers?.Authorization === "Bearer STALE") return { ok: false, status: 401, text: async () => "expired" };
+      if (init.headers?.Authorization === "Bearer FRESH") return { ok: true, status: 200, json: async () => ({ DailyApiRequests: { Remaining: 14999, Max: 15000 } }) };
+      return { ok: false, status: 500, text: async () => "unexpected" };
+    };
+
+    const oauthCfg = { mode: "live", authMode: "oauth", instanceUrl: "/salesforce", apiVersion: "v60.0", clientId: "KEY", loginUrl: "https://org" };
+    const result = await testConnection(oauthCfg);
+    check("a stale access token is refreshed and the call retried", /14,?999/.test(result.detail), result.detail);
+    check("the sequence is: call, refresh, call again", calls.length === 3, calls.map((c) => c.url.split("/").pop()).join(" -> "));
+    check("the first call went out with the stale token", calls[0].auth === "Bearer STALE");
+    check("the refresh used the refresh token", String(calls[1].body).includes("refresh_token=RT-LIVE"));
+    check("the retry went out with the fresh one", calls[2].auth === "Bearer FRESH");
+    check("and the fresh token is now the stored one", readOAuth(ls).accessToken === "FRESH");
+
+    // A second 401 on a fresh token is a real refusal, not a loop.
+    calls.length = 0;
+    writeOAuth({ accessToken: "STALE", refreshToken: "RT-LIVE" }, ls);
+    globalThis.fetch = async (url) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/services/oauth2/token")) return { ok: true, json: async () => ({ access_token: "STALE" }) };
+      return { ok: false, status: 401, text: async () => "still no" };
+    };
+    let twice = null;
+    try { await testConnection(oauthCfg); } catch (e) { twice = e.message; }
+    check("a 401 after a refresh is reported, not retried again", /rejected the sign-in/.test(twice || ""), twice);
+    check("exactly one refresh was attempted", calls.filter((u) => u.endsWith("/token")).length === 1);
+
+    // Token mode never refreshes: there is nothing to refresh with.
+    calls.length = 0;
+    globalThis.fetch = async () => { calls.push("api"); return { ok: false, status: 401, text: async () => "no" }; };
+    let tokenModeErr = null;
+    try { await testConnection({ ...oauthCfg, authMode: "token", accessToken: "PASTED" }); } catch (e) { tokenModeErr = e.message; }
+    check("in token mode a 401 is the familiar error", /Session tokens expire/.test(tokenModeErr || ""));
+    check("with no refresh attempted", calls.length === 1);
+
+    globalThis.fetch = savedFetch;
+    globalThis.localStorage = savedLS;
+  }
+
+
+  // ---- One snapshot per contract ----
+  //
+  // The estate's state and each contract's state have different lifetimes, so they are
+  // stored apart. Opening another contract reads a different contract snapshot and the
+  // same global one; that is what lets several contracts be open without their ninety
+  // pieces of state knowing about each other.
+  const multi = (() => {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k), key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; },
+    };
+  })();
+
+  const idA = newSessionId(), idB = newSessionId();
+  check("session ids are distinct", idA !== idB && /^c-[a-z0-9]{6}$/.test(idA), idA);
+  check("nothing stored reads as no contract", readContractSnapshot(multi, idA) === null);
+  check("a session list of an empty store is empty", listContractSessions(multi).length === 0);
+
+  writeContractSnapshot(multi, idA, { draftRecord: { id: "CTR-A" }, docVersion: "redline", summary: { id: "CTR-A", supplier: "Meridian", status: "In Negotiation", onboardingId: "a0X1" } });
+  writeContractSnapshot(multi, idB, { draftRecord: { id: "CTR-B" }, docVersion: "draft", summary: { id: "CTR-B", supplier: "Calder", status: "Draft", onboardingId: "a0X2" } });
+  writeSnapshot(multi, { activeContractId: idA, currentRole: "Legal", auditLog: [{ event: "x" }] });
+
+  check("each contract reads back its own state", readContractSnapshot(multi, idA)?.docVersion === "redline" && readContractSnapshot(multi, idB)?.docVersion === "draft");
+  check("neither can see the other's", !JSON.stringify(readContractSnapshot(multi, idA)).includes("CTR-B"));
+  check("the global snapshot holds the estate, not a contract",
+    readSnapshot(multi)?.currentRole === "Legal" && !("draftRecord" in readSnapshot(multi)));
+  check("contract snapshots are stamped with the schema", readContractSnapshot(multi, idA)?.__schema === SCHEMA);
+  check("and with when they were saved", typeof readContractSnapshot(multi, idA)?.savedAt === "string");
+
+  const listed = listContractSessions(multi);
+  check("the session list finds both", listed.length === 2 && listed.some((x) => x.id === idA) && listed.some((x) => x.id === idB));
+  check("it carries the summary and not the state", listed.every((x) => x.summary && !("draftRecord" in x)),
+    "twenty contracts should not mean deserialising twenty redlines to draw a list");
+  check("a summary carries the onboarding id, so a Create Contract link can find its contract",
+    listed.find((x) => x.id === idA).summary.onboardingId === "a0X1");
+  check("a snapshot from another schema is not listed", (() => {
+    multi.setItem(contractKey("c-stale1"), JSON.stringify({ __schema: SCHEMA - 1, summary: { id: "OLD" } }));
+    return !listContractSessions(multi).some((x) => x.id === "c-stale1");
+  })());
+  check("nor read", readContractSnapshot(multi, "c-stale1") === null);
+
+  removeContractSnapshot(multi, idB);
+  check("removing one leaves the other", listContractSessions(multi).length === 1 && readContractSnapshot(multi, idA));
+  clearAllSessions(multi);
+  check("clearing everything clears every contract and the estate",
+    listContractSessions(multi).length === 0 && readSnapshot(multi) === null);
+
+  // ---- Carrying a v3 contract across ----
+  //
+  // v3 held one contract mixed in with the estate. The rule is that a foreign schema is
+  // discarded, and this is the one exception: the shape is known, and the contract in it
+  // may be halfway through a negotiation.
+  const v3 = (() => {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k), key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; },
+    };
+  })();
+  v3.setItem(PERSIST_KEY, JSON.stringify({
+    __schema: 3,
+    draftRecord: { id: "CTR-2026-04821" }, redlineDoc: { meta: { version: "v1.2" } }, docVersion: "redline",
+    auditLog: [{ event: "kept" }], sfMilestones: [{ status: "Draft" }], approvalMatrix: [{ changeType: "Payment" }], extraContracts: [],
+  }));
+  const migratedId = migrate(v3);
+  check("a v3 contract becomes a contract snapshot", typeof migratedId === "string" && readContractSnapshot(v3, migratedId)?.draftRecord?.id === "CTR-2026-04821");
+  check("with its negotiation intact", readContractSnapshot(v3, migratedId)?.redlineDoc?.meta?.version === "v1.2");
+  check("the estate's keys go to the global snapshot",
+    readSnapshot(v3)?.auditLog?.[0]?.event === "kept" && readSnapshot(v3)?.sfMilestones?.length === 1);
+  check("and not into the contract", !("auditLog" in readContractSnapshot(v3, migratedId)));
+  check("the carried contract is the one that opens", readSnapshot(v3)?.activeContractId === migratedId);
+  check("the global snapshot is now this schema", readSnapshot(v3)?.__schema === SCHEMA);
+  check("migrating again is a no-op", migrate(v3) === null);
+
+  const v3empty = (() => {
+    const m = new Map();
+    return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; } };
+  })();
+  v3empty.setItem(PERSIST_KEY, JSON.stringify({ __schema: 3, auditLog: [], draftRecord: null }));
+  check("a v3 snapshot with no contract migrates to no contract", migrate(v3empty) === null && readSnapshot(v3empty)?.activeContractId === null);
+  check("a v2 snapshot is still discarded, not migrated", (() => {
+    const st = (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; } }; })();
+    st.setItem(PERSIST_KEY, JSON.stringify({ __schema: 2, draftRecord: { id: "X" } }));
+    return migrate(st) === null && readSnapshot(st) === null;
+  })(), "the exception is for the one shape that is known, not for every old shape");
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) {

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Cloud, ArrowRight, ShieldAlert, Check, KeyRound, Loader2, RefreshCw, ArrowUpRight, X,
+  Cloud, ShieldAlert, Check, Loader2, RefreshCw, ArrowUpRight, X, LogIn, LogOut, Settings2,
+  CircleCheck, CircleDashed, CircleAlert,
 } from "lucide-react";
 import { Tag, Btn, Field, GREEN, AMBER, RED, GRAY, kicker, formatDate } from "../lib/ui.jsx";
 import {
@@ -9,123 +10,299 @@ import {
 import { formatMoney } from "../data/contracts.js";
 
 const FIELD_LABEL = {
-  supplier_name: "Supplier", supplier_company_number: "Company number",
-  supplier_address: "Registered address", client_entity: "Legal entity",
-  service_category: "Service category", facility_site: "Facility / site",
+  supplier_name: "Supplier", supplier_registered_number: "Company number",
+  supplier_address: "Registered address", supplier_contact: "Supplier contact",
+  legal_entity_name: "Our legal entity", legal_entity_registered_number: "Our company number (inferred)",
+  legal_entity_address: "Our registered address (inferred)",
+  governing_law: "Governing law (inferred from country)", jurisdiction: "Jurisdiction (inferred from country)",
+  service_category: "Service category", facility_names: "Facility / site", title: "Contract title (inferred)",
   contract_value: "Contract value", currency_code: "Currency",
   payment_terms_days: "Payment terms (days)", business_owner: "Business owner",
   contract_owner: "Procurement owner", country: "Country / region",
 };
 
+function shortHost(url) {
+  try { return new URL(url).host; } catch { return url || "—"; }
+}
+
+function stamp(at) {
+  const d = at ? new Date(at) : null;
+  return d && !isNaN(d) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+// The page is a connection first and a supplier list second.
+//
+// It used to be the other way round: the list rendered, and whether it was talking to a
+// real org lived inside a collapsed settings card, along with every message about what
+// happened when you tried to sign in. Clicking Connect produced no visible result, and a
+// failed sign-in left nothing to read and no obvious way to try again. So the first
+// thing on the page is now what the connection is, what happened last time, and the one
+// button that changes it.
 export default function SalesforcePanel({
-  onBack, config, setConfig, onCreateContract, milestones, contractId, canCreate,
+  onBack, config, setConfig, onCreateContract, milestones, contractId, canCreate, arrival,
+  signedIn, whoami, authStatus, onConnect, onDisconnect, activeContractId,
 }) {
+  // The milestone list is estate-wide now — every push for every contract — so it needs a
+  // filter. It opens on the contract that is open, which is what a person on this page
+  // is almost always asking about, and offers the rest.
+  const [milestoneFilter, setMilestoneFilter] = useState(activeContractId || "all");
+  const milestoneContracts = [...new Set(milestones.map((m) => m.contractId).filter(Boolean))].sort();
+  const shownMilestones = milestoneFilter === "all"
+    ? milestones
+    : milestones.filter((m) => m.contractId === milestoneFilter);
   const [records, setRecords] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [conn, setConn] = useState("");
+  const [conn, setConn] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [openRow, setOpenRow] = useState(null);
 
-  const load = async () => {
+  const live = config.mode === "live";
+  const oauth = config.authMode === "oauth";
+  // "Connected" means the next API call has something to send. Simulated is always ready.
+  const ready = !live || (oauth ? signedIn : Boolean(config.accessToken));
+  const missingKey = live && oauth && !config.clientId;
+
+  // Load when, and only when, there is a connection to load through. This is an effect
+  // keyed on the connection, not a call made during render: switching mode, signing in or
+  // pasting a token all reload by themselves, and a failure does not stick.
+  useEffect(() => {
+    let cancelled = false;
+    if (!ready) { setRecords(null); setError(""); setLoading(false); return undefined; }
     setLoading(true); setError("");
-    try {
-      const { records: rows } = await listSuppliers(config);
-      setRecords(rows);
-    } catch (err) { setError(err.message); setRecords(null); }
-    setLoading(false);
-  };
-  if (records === null && !loading && !error) load();
+    listSuppliers(config)
+      .then(({ records: rows }) => { if (!cancelled) setRecords(rows); })
+      .catch((err) => { if (!cancelled) { setError(err.message); setRecords(null); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, config.mode, config.authMode, config.accessToken, config.instanceUrl, config.supplierObject, config.apiVersion]);
+
+  const reload = () => setConfig((c) => ({ ...c }));  // nudges the effect
+
+  // ---- connection card ----
+  let tone = GRAY, Icon = CircleDashed, headline = "Simulated", detail = "Three built-in records. No network, no org.";
+  if (live && ready) {
+    tone = GREEN; Icon = CircleCheck;
+    headline = `Connected to ${shortHost(config.loginUrl)}`;
+    detail = oauth
+      ? (whoami ? `Signed in as ${whoami.name} (${whoami.username}). The connection renews itself.` : "Signed in. The connection renews itself.")
+      : "Using a pasted session token. It expires with the session.";
+  } else if (live && missingKey) {
+    tone = RED; Icon = CircleAlert;
+    headline = "No consumer key";
+    detail = "VITE_SF_CLIENT_ID is not set, or the dev server has not been restarted since .env changed. Vite reads .env once, at startup.";
+  } else if (live) {
+    tone = AMBER; Icon = CircleDashed;
+    headline = `Not connected to ${shortHost(config.loginUrl)}`;
+    detail = oauth
+      ? "Sign in to your org. The browser goes to Salesforce's login page and comes back here."
+      : "Paste a session token below to read from the org.";
+  }
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-      <Btn onClick={onBack} icon={ArrowRight} variant="ghost" style={{ transform: "scaleX(-1)" }} />
       <button type="button" className="btn btn-ghost" onClick={onBack} style={{ marginBottom: 4 }}>
         ← Back to CLM
       </button>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap",
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
         padding: "var(--space-3) 0 var(--space-4)", borderBottom: "2px solid var(--color-divider)",
         marginBottom: "var(--space-4)" }}>
         <Cloud size={20} />
         <h2 style={{ margin: 0 }}>Supplier onboarding</h2>
         <Tag outline>Salesforce CRM</Tag>
-        <Tag c={config.mode === "live" ? RED : GRAY} style={{ fontSize: 10.5 }}>
-          {config.mode === "live" ? "LIVE: calling a real org" : "Simulated: no network"}
-        </Tag>
-        <Btn small variant="ghost" icon={KeyRound} onClick={() => setShowSettings((s) => !s)} style={{ marginLeft: "auto" }}>
-          Integration settings
-        </Btn>
-        <Btn small variant="ghost" icon={loading ? Loader2 : RefreshCw} spin={loading} onClick={load}>Refresh</Btn>
       </div>
 
-      <p style={{ fontSize: 12.5, opacity: 0.7, margin: "0 0 var(--space-4)", lineHeight: 1.65, maxWidth: 900 }}>
-        This is the CRM, not the CLM. Salesforce holds the supplier, the onboarding record and the commercial context;
-        it is where a business user starts, and <strong>Create contract</strong> hands that context to CLM rather than
-        asking anyone to retype it. CLM never writes back to any of these fields. It writes contract status and
-        milestones, and nothing else. A supplier whose onboarding is incomplete cannot be contracted with at all, and
-        the reason is shown rather than left to be guessed at.
-      </p>
+      {arrival && arrival.state !== "ready" && (
+        <div
+          className="clm-readonly-banner"
+          style={{ marginBottom: "var(--space-4)",
+            background: arrival.state === "blocked" ? AMBER.bg : arrival.state === "loading" ? GRAY.bg : RED.bg,
+            color: arrival.state === "blocked" ? AMBER.color : arrival.state === "loading" ? GRAY.color : RED.color,
+            borderColor: "currentColor" }}
+        >
+          <ShieldAlert size={15} />
+          <span>
+            {arrival.state === "loading" && <>Opening from Salesforce, reading the onboarding record…</>}
+            {arrival.state === "blocked" && (
+              <>
+                <strong>{arrival.record?.Name} cannot be contracted yet.</strong> Salesforce offered the link, but the
+                gate is checked again here and these prerequisites are outstanding:{" "}
+                <strong>{arrival.missing.map((m) => m.label).join("; ")}</strong>. Clear them in Salesforce and open
+                the link again.
+              </>
+            )}
+            {arrival.state === "missing" && (
+              <>
+                <strong>That onboarding record could not be read.</strong> The link points at{" "}
+                <code>{arrival.onboardingId}</code>, which this org either does not have or has not granted you access
+                to. Check the CLM_Integration permission set is assigned.
+              </>
+            )}
+            {arrival.state === "error" && (
+              <><strong>Salesforce could not be reached.</strong> {arrival.detail}</>
+            )}
+          </span>
+        </div>
+      )}
 
-      {showSettings && (
-        <div className="card" style={{ marginBottom: "var(--space-4)", gap: 10 }}>
-          <div className="card-title" style={{ fontSize: 15 }}>Salesforce connection</div>
-          <div className="clm-grid-2">
-            <Field label="Mode">
-              <select className="input" value={config.mode} onChange={(e) => { setConfig((c) => ({ ...c, mode: e.target.value })); setRecords(null); }}>
-                <option value="simulated">Simulated, no org needed</option>
-                <option value="live">Live, call a Salesforce org</option>
-              </select>
-            </Field>
-            <Field label="Instance URL" hint="/salesforce is proxied by Vite in dev. A Developer Edition org looks like https://yourorg-dev-ed.develop.my.salesforce.com">
-              <input className="input" value={config.instanceUrl} onChange={(e) => setConfig((c) => ({ ...c, instanceUrl: e.target.value }))} />
-            </Field>
+      {/* ---------- CONNECTION ---------- */}
+      <div className="card" style={{ marginBottom: "var(--space-4)", gap: 10, borderLeft: `4px solid ${tone.color}` }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <Icon size={22} style={{ color: tone.color, flex: "none", marginTop: 2 }} />
+          <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <div className="card-title" style={{ margin: 0, fontSize: 16 }}>{headline}</div>
+              {live && <Tag c={oauth ? GREEN : GRAY} style={{ fontSize: 10 }}>{oauth ? "OAuth" : "session token"}</Tag>}
+            </div>
+            <p style={{ margin: "3px 0 0", fontSize: 12.5, opacity: 0.75, lineHeight: 1.55 }}>{detail}</p>
+
+            {authStatus && (
+              <div style={{ marginTop: 8, padding: "7px 10px", fontSize: 12.5, lineHeight: 1.5,
+                background: authStatus.ok ? GREEN.bg : RED.bg, color: authStatus.ok ? GREEN.color : RED.color,
+                display: "flex", gap: 8, alignItems: "flex-start" }}>
+                {authStatus.ok ? <Check size={14} style={{ flex: "none", marginTop: 2 }} /> : <X size={14} style={{ flex: "none", marginTop: 2 }} />}
+                <span>
+                  <strong>{authStatus.ok ? "Sign-in succeeded" : "Sign-in failed"}</strong>
+                  {authStatus.at && <span style={{ opacity: 0.7 }}> · {stamp(authStatus.at)}</span>}
+                  {authStatus.message && <> — {authStatus.message}</>}
+                </span>
+              </div>
+            )}
+            {conn && (
+              <div style={{ marginTop: 8, padding: "7px 10px", fontSize: 12.5, lineHeight: 1.5,
+                background: conn.ok ? GREEN.bg : RED.bg, color: conn.ok ? GREEN.color : RED.color }}>
+                {conn.text}
+              </div>
+            )}
           </div>
-          <Field label="Access token" hint="A session token from your org. Held in this tab's memory only, never stored. In production this call belongs on a server, not in a browser.">
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", alignSelf: "flex-start" }}>
+            {live && oauth && !signedIn && (
+              <Btn variant="primary" icon={LogIn} onClick={onConnect} disabled={missingKey}
+                title={missingKey ? "Set VITE_SF_CLIENT_ID in .env and restart the dev server" : "Sign in through your org"}>
+                {authStatus && !authStatus.ok ? "Try again" : "Connect to Salesforce"}
+              </Btn>
+            )}
+            {live && ready && (
+              <Btn small variant="secondary" onClick={async () => {
+                setConn(null);
+                try { const r = await testConnection(config); setConn({ ok: true, text: r.detail }); }
+                catch (err) { setConn({ ok: false, text: err.message }); }
+              }}>Test connection</Btn>
+            )}
+            {live && oauth && signedIn && (
+              <Btn small variant="ghost" icon={LogOut} onClick={onDisconnect}>Disconnect</Btn>
+            )}
+            <Btn small variant="ghost" icon={Settings2} onClick={() => setShowSettings((s) => !s)}>
+              {showSettings ? "Hide settings" : "Settings"}
+            </Btn>
+          </div>
+        </div>
+
+        {/* mode: live first, because that is what this is for */}
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", borderTop: "1px solid var(--color-divider)", paddingTop: 10 }}>
+          {[
+            ["live", "Live", "Your Salesforce org"],
+            ["simulated", "Simulated", "Three built-in records, no network"],
+          ].map(([value, label, hint]) => (
+            <label key={value} style={{ display: "flex", gap: 7, alignItems: "flex-start", fontSize: 13, cursor: "pointer" }}>
+              <input type="radio" name="sf-mode" value={value} checked={config.mode === value}
+                onChange={() => { setConn(null); setConfig((c) => ({ ...c, mode: value })); }} style={{ marginTop: 3 }} />
+              <span><strong>{label}</strong><span style={{ opacity: 0.6 }}> — {hint}</span></span>
+            </label>
+          ))}
+        </div>
+
+        {live && !oauth && (
+          <Field label="Session token" hint="From sf org display --verbose, or Developer Console → UserInfo.getSessionId(). Held in this tab's memory only. Expires with the session.">
             <input className="input" type="password" value={config.accessToken} placeholder="00D…"
               onChange={(e) => setConfig((c) => ({ ...c, accessToken: e.target.value }))} />
           </Field>
-          <div className="clm-grid-2">
-            <Field label="API version"><input className="input" value={config.apiVersion} onChange={(e) => setConfig((c) => ({ ...c, apiVersion: e.target.value }))} /></Field>
-            <Field label="Supplier object" hint="Blueprint §14 lists the exact object model as still to be validated, so it is settings rather than code.">
-              <input className="input" value={config.supplierObject} onChange={(e) => setConfig((c) => ({ ...c, supplierObject: e.target.value }))} />
+        )}
+
+        {showSettings && (
+          <div style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 10, display: "grid", gap: 10 }}>
+            <Field label="Authentication">
+              <select className="input" value={config.authMode} onChange={(e) => { setConn(null); setConfig((c) => ({ ...c, authMode: e.target.value })); }}>
+                <option value="oauth">Sign in with Salesforce (OAuth, refreshes itself)</option>
+                <option value="token">Paste a session token (expires with the session)</option>
+              </select>
             </Field>
-          </div>
-          <div className="clm-grid-2">
-            <Field label="Contract status field"><input className="input" value={config.contractStatusField} onChange={(e) => setConfig((c) => ({ ...c, contractStatusField: e.target.value }))} /></Field>
-            <Field label="Contract ID field"><input className="input" value={config.contractIdField} onChange={(e) => setConfig((c) => ({ ...c, contractIdField: e.target.value }))} /></Field>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <Btn small variant="secondary" onClick={async () => {
-              try { setConn((await testConnection(config)).detail); } catch (err) { setConn(err.message); }
-            }}>Test connection</Btn>
-            {conn && <span style={{ fontSize: 11.5, opacity: 0.7 }}>{conn}</span>}
-          </div>
-          {config.mode === "live" && (
-            <div style={{ background: "#fdf1da", border: "1px solid #f5dfa8", color: "#7a4a05", padding: 10, fontSize: 12, lineHeight: 1.6 }}>
-              <strong>Two things a browser cannot do.</strong> Salesforce will not accept a cross-origin call from an
-              unlisted origin, so add yours under Setup → CORS, and a token in a browser tab is readable by anyone with
-              the tab. Both are why the production shape of this is a server-side connector holding the credential. The
-              dev proxy is enough to prove the integration against your own Developer Edition org, and not enough to ship.
+            {oauth && (
+              <div className="clm-grid-2">
+                <Field label="Consumer key" hint="From the FM CLM Demo connected app. Not a secret: a PKCE public client carries it in the page by design.">
+                  <input className="input" value={config.clientId} placeholder="3MVG9…"
+                    onChange={(e) => setConfig((c) => ({ ...c, clientId: e.target.value }))} />
+                </Field>
+                <Field label="Login URL" hint="Your org's My Domain. The browser is sent here to sign in, so it cannot go through the proxy.">
+                  <input className="input" value={config.loginUrl}
+                    onChange={(e) => setConfig((c) => ({ ...c, loginUrl: e.target.value }))} />
+                </Field>
+              </div>
+            )}
+            <div className="clm-grid-2">
+              <Field label="Instance URL" hint="/salesforce is the dev-server proxy path. From a deployed site, the real org address, and its origin allowlisted under Setup → CORS.">
+                <input className="input" value={config.instanceUrl} onChange={(e) => setConfig((c) => ({ ...c, instanceUrl: e.target.value }))} />
+              </Field>
+              <Field label="API version"><input className="input" value={config.apiVersion} onChange={(e) => setConfig((c) => ({ ...c, apiVersion: e.target.value }))} /></Field>
             </div>
-          )}
+            <div className="clm-grid-2">
+              <Field label="Supplier object" hint="Blueprint §14 lists the object model as still to be validated, so it is a setting rather than code.">
+                <input className="input" value={config.supplierObject} onChange={(e) => setConfig((c) => ({ ...c, supplierObject: e.target.value }))} />
+              </Field>
+              <Field label="Status / ID fields written back">
+                <div style={{ display: "grid", gap: 6 }}>
+                  <input className="input" value={config.contractStatusField} onChange={(e) => setConfig((c) => ({ ...c, contractStatusField: e.target.value }))} />
+                  <input className="input" value={config.contractIdField} onChange={(e) => setConfig((c) => ({ ...c, contractIdField: e.target.value }))} />
+                </div>
+              </Field>
+            </div>
+            <p style={{ fontSize: 11, opacity: 0.55, margin: 0, lineHeight: 1.5 }}>
+              With OAuth, the refresh token is kept in this browser so the connection survives a reload. It is readable
+              by anything on this page, which is why in production the call and the credential belong on a server.
+              Disconnect revokes it at the org.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ---------- SUPPLIERS ---------- */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <div className="card-title" style={{ margin: 0, fontSize: 15 }}>
+          {live ? "Suppliers ready to contract" : "Suppliers ready to contract (simulated)"}
         </div>
-      )}
+        {records && <Tag c={GRAY} style={{ fontSize: 10 }}>{records.length} onboarding record{records.length === 1 ? "" : "s"}</Tag>}
+        <Btn small variant="ghost" icon={loading ? Loader2 : RefreshCw} spin={loading} onClick={reload} disabled={!ready} style={{ marginLeft: "auto" }}>Refresh</Btn>
+      </div>
+      <p style={{ fontSize: 12.5, opacity: 0.7, margin: "0 0 var(--space-4)", lineHeight: 1.65, maxWidth: 900 }}>
+        Blueprint §6.1: contracting starts here, from a supplier whose onboarding has reached the state that permits
+        it. The CLM checks the four prerequisites itself and refuses when any is outstanding, whatever the link that
+        opened it claimed. Clear them in Salesforce, not here.
+      </p>
 
       {error && (
-        <div className="card" style={{ marginBottom: "var(--space-4)", borderColor: "var(--color-accent)" }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-            <ShieldAlert size={16} style={{ flex: "none", marginTop: 1 }} />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Could not read the org</div>
-              <p style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.75, lineHeight: 1.6 }}>{error}</p>
-            </div>
-          </div>
+        <div style={{ background: RED.bg, color: RED.color, padding: 10, marginBottom: "var(--space-4)", fontSize: 12.5, lineHeight: 1.5 }}>
+          <strong>Could not read the org.</strong> {error}
         </div>
       )}
 
-      <div className="clm-envelope-grid">
+      <div className="clm-grid-2" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)", alignItems: "start" }}>
         <div style={{ display: "grid", gap: "var(--space-3)" }}>
+          {!ready && (
+            <div className="card" style={{ alignItems: "center", textAlign: "center", padding: "var(--space-6)", gap: 8 }}>
+              <CircleDashed size={26} style={{ opacity: 0.4 }} />
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Nothing to show until you are connected</div>
+              <p style={{ fontSize: 12.5, opacity: 0.65, margin: 0, maxWidth: 420, lineHeight: 1.55 }}>
+                {oauth
+                  ? "Sign in above. Your org's suppliers appear here the moment the connection is made."
+                  : "Paste a session token above to read from the org."}
+              </p>
+              {oauth && !missingKey && <Btn variant="primary" icon={LogIn} onClick={onConnect}>Connect to Salesforce</Btn>}
+            </div>
+          )}
+
           {(records || []).map((r) => {
             const el = eligibility(r);
             const ctx = contextFor(r);
@@ -137,6 +314,7 @@ export default function SalesforcePanel({
                   <Tag c={el.eligible ? GREEN : AMBER} style={{ fontSize: 10.5 }}>
                     {r.Onboarding_Status__c || (r.live ? "onboarding state not in this org" : "unknown")}
                   </Tag>
+                  {r.live && <Tag c={GREEN} style={{ fontSize: 9.5 }}>from your org</Tag>}
                   <span style={{ fontSize: 11, opacity: 0.5, marginLeft: "auto", fontFamily: "ui-monospace, monospace" }}>
                     {r.Supplier_Onboarding_Id__c || r.Id}
                   </span>
@@ -201,18 +379,39 @@ export default function SalesforcePanel({
             );
           })}
           {loading && <p style={{ fontSize: 12.5, opacity: 0.6 }}>Reading the org…</p>}
-          {records && records.length === 0 && <p style={{ fontSize: 12.5, opacity: 0.6 }}>No supplier records returned.</p>}
+          {ready && records && records.length === 0 && (
+            <p style={{ fontSize: 12.5, opacity: 0.6 }}>
+              Connected, but no onboarding records came back. Run <code>scripts/seed-demo-data.apex</code>, or check
+              the CLM_Integration permission set is assigned.
+            </p>
+          )}
         </div>
 
         <div className="card" style={{ gap: 8, alignSelf: "start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <div className="card-title" style={{ margin: 0, fontSize: 15 }}>Contract status in Salesforce</div>
-            <Tag c={GRAY} style={{ fontSize: 10, marginLeft: "auto" }}>{milestones.length} pushed</Tag>
+            <Tag c={GRAY} style={{ fontSize: 10, marginLeft: "auto" }}>
+              {shownMilestones.length}{milestoneFilter !== "all" && milestones.length !== shownMilestones.length ? ` of ${milestones.length}` : ""} pushed
+            </Tag>
           </div>
+          {milestoneContracts.length > 0 && (
+            <select
+              className="input" value={milestoneFilter} aria-label="Filter milestones by contract"
+              onChange={(e) => setMilestoneFilter(e.target.value)}
+              style={{ fontSize: 12, minHeight: 32, padding: "4px 8px" }}
+            >
+              <option value="all">All contracts ({milestones.length})</option>
+              {milestoneContracts.map((id) => (
+                <option key={id} value={id}>
+                  {id}{id === activeContractId ? " · open now" : ""} ({milestones.filter((m) => m.contractId === id).length})
+                </option>
+              ))}
+            </select>
+          )}
           <p style={{ fontSize: 11.5, opacity: 0.6, margin: 0, lineHeight: 1.6 }}>
-            §11: "Salesforce reflects contract status and key lifecycle milestones." Every lifecycle transition writes
-            the contract id and status onto the supplier record. Two fields, and nothing else: the CRM owns the
-            supplier, so CLM has no business editing anything about them.
+            §11: "Salesforce reflects contract status and key lifecycle milestones." Every transition writes a
+            pointer onto the onboarding record and the full lifecycle onto a CLM Contract record, including PO
+            eligibility.
           </p>
           {contractId && (
             <div style={{ fontSize: 12, borderTop: "1px solid var(--color-divider)", paddingTop: 8 }}>
@@ -225,11 +424,24 @@ export default function SalesforcePanel({
               Nothing yet. Create a contract and the status lands here on every transition.
             </p>
           )}
-          {milestones.slice().reverse().map((m, i) => (
+          {milestones.length > 0 && shownMilestones.length === 0 && (
+            <p style={{ fontSize: 12, opacity: 0.55, margin: 0 }}>
+              Nothing pushed for this contract yet.
+            </p>
+          )}
+          {shownMilestones.slice().reverse().map((m, i) => (
             <div key={i} style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 7, fontSize: 12 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                {milestoneFilter === "all" && m.contractId && (
+                  <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, opacity: 0.7 }}>{m.contractId}</span>
+                )}
                 <strong>{m.status}</strong>
-                <Tag c={m.simulated ? GRAY : GREEN} style={{ fontSize: 9.5 }}>{m.simulated ? "simulated" : "written"}</Tag>
+                <Tag c={m.failed ? RED : m.simulated ? GRAY : GREEN} style={{ fontSize: 9.5 }}>
+                  {m.failed ? "failed" : m.simulated ? "simulated" : "written"}
+                </Tag>
+                {m.poEligible != null && !m.simulated && (
+                  <Tag c={m.poEligible ? GREEN : GRAY} style={{ fontSize: 9.5 }}>PO {m.poEligible ? "eligible" : "not eligible"}</Tag>
+                )}
                 <span style={{ opacity: 0.5, marginLeft: "auto", fontSize: 10.5 }}>{formatDate(m.at)}</span>
               </div>
               <div style={{ opacity: 0.65, fontSize: 11, marginTop: 2 }}>{m.milestone}</div>

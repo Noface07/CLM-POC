@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Wiring a Salesforce org to the FM CLM demo by command line, so a contract starts and ends in Salesforce.">
+<style>
+  html { color-scheme: light dark; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Salesforce Round Trip</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    --ground:#F6F7FA; --surface:#FFFFFF; --surface-2:#EFF1F7;
+    --ink:#131A29; --ink-2:#515C74; --ink-3:#7C879E;
+    --rule:#DEE3EE; --rule-strong:#C3CBDC;
+    --clm:#2B4ACB; --clm-soft:#E9EDFC;
+    --org:#A0650F; --org-soft:#FBF1DE;
+    --ok:#2E6B45; --ok-soft:#E2F0E7;
+    --gap:#A62F38; --gap-soft:#FAE7E8;
+    --warn:#8A5A0C; --warn-soft:#FBF0DB;
+    --shadow:0 1px 2px rgba(19,26,41,.05), 0 8px 24px -16px rgba(19,26,41,.28);
+    --display:"Newsreader", Georgia, serif;
+    --body:"IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono:"IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --measure:70ch; --pad:clamp(1.25rem,4vw,3rem);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0D1120; --surface:#151A2B; --surface-2:#1D2337;
+      --ink:#E7EBF4; --ink-2:#A0AAC1; --ink-3:#7A8499;
+      --rule:#29314A; --rule-strong:#3B4665;
+      --clm:#93A5F7; --clm-soft:#1B2340;
+      --org:#E6B463; --org-soft:#2C2314;
+      --ok:#74CE96; --ok-soft:#16291F;
+      --gap:#EC8288; --gap-soft:#2C1719;
+      --warn:#E3B667; --warn-soft:#2A2213;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1120; --surface:#151A2B; --surface-2:#1D2337;
+    --ink:#E7EBF4; --ink-2:#A0AAC1; --ink-3:#7A8499;
+    --rule:#29314A; --rule-strong:#3B4665;
+    --clm:#93A5F7; --clm-soft:#1B2340;
+    --org:#E6B463; --org-soft:#2C2314;
+    --ok:#74CE96; --ok-soft:#16291F;
+    --gap:#EC8288; --gap-soft:#2C1719;
+    --warn:#E3B667; --warn-soft:#2A2213;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing:border-box; }
+  body { background:var(--ground); color:var(--ink); font-family:var(--body); font-size:16px; line-height:1.62; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:78rem; margin:0 auto; padding:var(--pad); display:flex; flex-direction:column; gap:clamp(2.5rem,5vw,3.75rem); }
+  .col { max-width:var(--measure); }
+
+  h1,h2,h3 { font-family:var(--display); font-weight:600; text-wrap:balance; margin:0; }
+  h1 { font-size:clamp(2.1rem,5vw,3.05rem); line-height:1.08; letter-spacing:-.015em; }
+  h2 { font-size:clamp(1.45rem,3vw,1.9rem); line-height:1.2; letter-spacing:-.01em; }
+  h3 { font-size:1.08rem; line-height:1.32; }
+  p { margin:0; }
+  a { color:var(--clm); text-underline-offset:.18em; }
+  a:focus-visible, button:focus-visible { outline:2px solid var(--clm); outline-offset:3px; }
+
+  code, pre, .mono { font-family:var(--mono); font-variant-ligatures:none; }
+  code:not(pre code) { font-size:.86em; background:var(--surface-2); border:1px solid var(--rule); padding:.09em .34em; border-radius:3px; word-break:break-word; }
+  pre { margin:0; background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--clm); padding:.95rem 1.05rem; overflow-x:auto; font-size:.79rem; line-height:1.7; }
+  pre.term { border-left-color:var(--ok); }
+  pre .cm { color:var(--ink-3); }
+  pre .out { color:var(--ink-2); }
+
+  .eyebrow { font-family:var(--mono); font-size:.71rem; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3); }
+  .standfirst { font-size:1.1rem; color:var(--ink-2); max-width:62ch; }
+  .masthead { display:flex; flex-direction:column; gap:1.2rem; }
+
+  section { display:flex; flex-direction:column; gap:1.3rem; }
+  .sec-head { display:flex; flex-direction:column; gap:.5rem; }
+  .prose { display:flex; flex-direction:column; gap:.9rem; max-width:var(--measure); }
+  .prose p { color:var(--ink-2); }
+  .prose p strong, li strong { color:var(--ink); font-weight:600; }
+
+  .scroll-x { overflow-x:auto; border:1px solid var(--rule); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; min-width:34rem; }
+  thead th { text-align:left; font-family:var(--mono); font-weight:500; font-size:.67rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); padding:.65rem .85rem; border-bottom:1px solid var(--rule-strong); white-space:nowrap; }
+  tbody td { padding:.62rem .85rem; border-bottom:1px solid var(--rule); vertical-align:top; line-height:1.5; }
+  tbody tr:last-child td { border-bottom:0; }
+  td.k { font-family:var(--mono); font-size:.77rem; white-space:nowrap; }
+
+  .chip { display:inline-flex; align-items:center; gap:.3rem; font-family:var(--mono); font-size:.66rem; letter-spacing:.07em; text-transform:uppercase; padding:.16rem .44rem; border-radius:2px; white-space:nowrap; }
+  .chip-ok{background:var(--ok-soft);color:var(--ok);} .chip-gap{background:var(--gap-soft);color:var(--gap);}
+  .chip-warn{background:var(--warn-soft);color:var(--warn);} .chip-org{background:var(--org-soft);color:var(--org);}
+  .chip-clm{background:var(--clm-soft);color:var(--clm);}
+
+  /* steps */
+  .steps { display:flex; flex-direction:column; gap:2.4rem; }
+  .stp { display:grid; grid-template-columns:2.9rem 1fr; gap:1.25rem; align-items:start; }
+  .stp-n { font-family:var(--display); font-size:1.85rem; line-height:1; color:var(--ink-3); font-variant-numeric:tabular-nums; padding-top:.08rem; }
+  .stp-b { display:flex; flex-direction:column; gap:1rem; min-width:0; }
+  .stp-h { display:flex; flex-direction:column; gap:.4rem; }
+  .stp-meta { display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; }
+  @media (max-width:620px){ .stp{grid-template-columns:1fr;gap:.4rem;} .stp-n{font-size:1.35rem;} }
+
+  ol.clicks, ul.clicks { margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.62rem; font-size:.93rem; color:var(--ink-2); max-width:66ch; }
+  ol.clicks li::marker { color:var(--clm); font-family:var(--mono); font-size:.84em; }
+  ul.clicks li::marker { color:var(--ink-3); }
+  .ui { font-family:var(--body); font-weight:600; color:var(--ink); background:var(--surface-2); border:1px solid var(--rule); padding:.04em .38em; border-radius:3px; font-size:.93em; white-space:nowrap; }
+
+  .note { background:var(--warn-soft); border:1px solid color-mix(in srgb, var(--warn) 26%, transparent); padding:.78rem .95rem; font-size:.87rem; line-height:1.55; display:flex; flex-direction:column; gap:.35rem; max-width:var(--measure); }
+  .note-h { font-weight:600; color:var(--ink); }
+  .note.ok { background:var(--ok-soft); border-color:color-mix(in srgb, var(--ok) 26%, transparent); }
+  .note.bad { background:var(--gap-soft); border-color:color-mix(in srgb, var(--gap) 26%, transparent); }
+
+  .seam { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:.5rem; border:1px solid var(--rule); background:var(--surface); padding:1rem; box-shadow:var(--shadow); }
+  .sn { display:flex; flex-direction:column; gap:.28rem; padding:.5rem .65rem; }
+  .sn .l { font-family:var(--mono); font-size:.67rem; letter-spacing:.1em; text-transform:uppercase; }
+  .sn .w { font-size:.85rem; color:var(--ink-2); line-height:1.42; }
+  .sn.org{background:var(--org-soft);} .sn.org .l{color:var(--org);}
+  .sn.clm{background:var(--clm-soft);} .sn.clm .l{color:var(--clm);}
+  .ar { display:flex; align-items:center; color:var(--ink-3); font-family:var(--mono); }
+  @media (max-width:820px){ .seam{grid-template-columns:1fr;} .ar{transform:rotate(90deg);justify-content:center;} }
+
+  footer { border-top:1px solid var(--rule); padding-top:1.3rem; font-size:.84rem; color:var(--ink-3); max-width:var(--measure); display:flex; flex-direction:column; gap:.45rem; }
+  @media (prefers-reduced-motion: reduce){ *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;} }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">FM AI-CLM POC · step-by-step setup · no Salesforce experience assumed</div>
+  <h1>Salesforce Round Trip</h1>
+  <p class="standfirst">
+    Getting a free Salesforce org talking to your CLM demo, so a contract starts in Salesforce and its status
+    comes back there. Nine steps. Every field and object is already written as files in your repo &mdash; you run
+    commands, you do not click anything into existence.
+  </p>
+
+  <div class="seam">
+    <div class="sn org"><span class="l">Salesforce &mdash; start</span><span class="w">A supplier passes onboarding. <strong>Create Contract</strong> opens the CLM with their details already filled in.</span></div>
+    <div class="ar">&rarr;</div>
+    <div class="sn clm"><span class="l">CLM &mdash; middle</span><span class="w">Everything you have already built: draft, review, negotiation, AI, signature, obligations.</span></div>
+    <div class="ar">&rarr;</div>
+    <div class="sn org"><span class="l">Salesforce &mdash; end</span><span class="w">Status, version and <strong>PO eligibility</strong> written back onto a contract record.</span></div>
+  </div>
+</header>
+
+<!-- GLOSSARY -->
+<section>
+  <div class="sec-head">
+    <h2>Six words you will see constantly</h2>
+    <p class="col" style="color:var(--ink-2);">Salesforce has its own vocabulary for ordinary things. This is all of it you need.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>Word</th><th>What it actually means</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Org</td><td>Your own private copy of Salesforce. Yours will be free and permanent. &ldquo;Org&rdquo; is short for organisation.</td></tr>
+        <tr><td class="k">Object</td><td>A table. <code>Account</code> is a built-in one. <code>Supplier_Onboarding__c</code> is one we are adding &mdash; the <code>__c</code> suffix just means &ldquo;custom&rdquo;.</td></tr>
+        <tr><td class="k">Field</td><td>A column on that table. Also gets <code>__c</code> when custom.</td></tr>
+        <tr><td class="k">Record</td><td>A row. One supplier is one Account record.</td></tr>
+        <tr><td class="k">API name</td><td>The name code uses, e.g. <code>Contract_Value__c</code>. Different from the <em>label</em> a person sees (&ldquo;Contract Value&rdquo;). Our code depends on the API names, so do not change them.</td></tr>
+        <tr><td class="k">Setup</td><td>The admin area. Always the <strong>gear icon in the top-right</strong> of any Salesforce page.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- WHAT IS READY -->
+<section>
+  <div class="sec-head"><h2>What is already done for you</h2></div>
+  <div class="prose">
+    <p>I have generated the entire Salesforce configuration as files, sitting in a new <code>salesforce/</code>
+    folder in your project. You are not going to create 40 fields by hand &mdash; that is roughly four screens each
+    and most of an afternoon. You will run one command that creates all of them at once.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>File or folder</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr><td class="k">salesforce/sfdx-project.json</td><td>Tells the Salesforce tool this folder is a project</td></tr>
+        <tr><td class="k">…/objects/Supplier_Onboarding__c/</td><td>The onboarding table + its 20 fields</td></tr>
+        <tr><td class="k">…/objects/CLM_Contract__c/</td><td>The contract table + its 20 fields</td></tr>
+        <tr><td class="k">…/layouts/</td><td>So the fields actually appear on screen when you open a record</td></tr>
+        <tr><td class="k">…/tabs/</td><td>So the two objects show up in the app menu</td></tr>
+        <tr><td class="k">…/permissionsets/CLM_Integration…</td><td>Grants you access to everything above in one click</td></tr>
+        <tr><td class="k">salesforce/scripts/seed-demo-data.apex</td><td>Creates the three demo suppliers, matching the CLM&rsquo;s simulated ones exactly</td></tr>
+        <tr><td class="k">salesforce/generate-metadata.py</td><td>The script that produced all of it, if you ever need to change a field</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- STEPS -->
+<section class="steps">
+
+  <!-- 1 -->
+  <div class="stp">
+    <div class="stp-n">1</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">in a browser</span><span class="eyebrow">10 min, mostly waiting for email</span></div>
+        <h2>Create your free Salesforce org</h2>
+      </div>
+      <ol class="clicks">
+        <li>Go to <strong>developer.salesforce.com/signup</strong></li>
+        <li>Fill the form. First name, last name, a real email you can open, job role and country &mdash; anything sensible.</li>
+        <li><strong>Username</strong> is the one that confuses everybody. It <em>looks</em> like an email but is not one; it just has to be globally unique across all of Salesforce and no mail is ever sent to it. Use something like <code>yuvraj@clmpoc.demo</code>. Write it down &mdash; this is what you log in with.</li>
+        <li>Submit. Check the email you gave for a message titled roughly <em>&ldquo;Welcome to Salesforce: Verify your account&rdquo;</em>. It can take a couple of minutes.</li>
+        <li>Click the link, set a password, pick a security question. You land on the Salesforce home page.</li>
+      </ol>
+      <div class="note ok col">
+        <span class="note-h">Note your org address.</span>
+        <p>Look at the browser address bar. It will be something like
+        <code>https://orgfarm-a1b2c3-dev-ed.develop.lightning.force.com</code>. The part you will need later is the
+        same host with <strong><code>my.salesforce.com</code></strong> instead of <code>lightning.force.com</code>.
+        Do not worry about copying it precisely now &mdash; step 3 prints it for you.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="stp">
+    <div class="stp-n">2</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-clm">in your terminal</span><span class="eyebrow">2 min</span></div>
+        <h2>Install the Salesforce command-line tool</h2>
+      </div>
+      <div class="prose"><p>This is what lets you push files into the org instead of clicking. You already have Node and npm, so it is one command.</p></div>
+      <pre class="term">npm install --global @salesforce/cli
+
+<span class="cm"># check it worked -- you should see a version number</span>
+sf --version</pre>
+      <div class="note col">
+        <span class="note-h">If <code>sf</code> is &ldquo;not recognised&rdquo; afterwards</span>
+        <p><strong>Close your terminal and open a new one.</strong> Windows only picks up newly installed global
+        commands in a fresh terminal. If it still fails, run <code>npm config get prefix</code> &mdash; that folder
+        needs to be on your PATH.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="stp">
+    <div class="stp-n">3</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-clm">in your terminal</span><span class="eyebrow">1 min</span></div>
+        <h2>Connect the tool to your org</h2>
+      </div>
+      <pre class="term">cd C:\Users\yuvra\Downloads\Demo-5\clm-demo_4\clm-demo\salesforce
+
+sf org login web --alias clmdemo --set-default</pre>
+      <ol class="clicks">
+        <li>A browser window opens on the Salesforce login page.</li>
+        <li>Log in with the <strong>username</strong> from step 1 (the fake-email one) and your password.</li>
+        <li>A page asks you to <span class="ui">Allow</span> access. Click it.</li>
+        <li>The browser says you can close it. Back in the terminal you will see
+        <code class="mono">Successfully authorized … with org ID …</code></li>
+      </ol>
+      <div class="prose">
+        <p><code>--alias clmdemo</code> just gives the connection a short name so you do not retype the username
+        every time. Everything below uses it.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="stp">
+    <div class="stp-n">4</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">creates everything</span><span class="eyebrow">2 min</span></div>
+        <h2>Deploy the objects and fields</h2>
+      </div>
+      <div class="prose"><p>Still inside the <code>salesforce</code> folder. This is the command that replaces the afternoon of clicking.</p></div>
+      <pre class="term">sf project deploy start --target-org clmdemo
+
+<span class="out">Deploying v62.0 metadata to yuvraj@clmpoc.demo …
+Status: Succeeded | ████████████████████ | 48/48 Components</span></pre>
+      <div class="prose">
+        <p>That created two objects, forty fields, two page layouts, two tabs and a permission set. If it says
+        <strong>Succeeded</strong>, the Salesforce half of the data model is done.</p>
+      </div>
+      <div class="note bad col">
+        <span class="note-h">If it fails, read the first error only.</span>
+        <p>Deploy errors cascade &mdash; one bad field produces ten complaints. Fix the first, run again.
+        The likely ones are in the troubleshooting table at the bottom.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <div class="stp">
+    <div class="stp-n">5</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">permissions</span><span class="eyebrow">30 seconds</span></div>
+        <h2>Give yourself access to what you just made</h2>
+      </div>
+      <div class="prose">
+        <p>Salesforce does not automatically grant access to new fields, even to the person who created them. The
+        permission set in the deploy grants all of it; you just have to switch it on for yourself.</p>
+      </div>
+      <pre class="term">sf org assign permset --name CLM_Integration --target-org clmdemo</pre>
+      <div class="note col">
+        <span class="note-h">Skip this and everything looks broken in a confusing way.</span>
+        <p>Records exist but fields appear blank, and the CLM&rsquo;s queries return rows with missing values rather
+        than an error. If something reads empty later, come back and check this ran.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 -->
+  <div class="stp">
+    <div class="stp-n">6</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">demo data</span><span class="eyebrow">30 seconds</span></div>
+        <h2>Load the three demo suppliers</h2>
+      </div>
+      <pre class="term">sf apex run --file scripts/seed-demo-data.apex --target-org clmdemo</pre>
+      <div class="prose">
+        <p>This creates the same three suppliers the CLM already shows in simulated mode, so you can flip between
+        simulated and live and see identical data &mdash; which is what makes &ldquo;this is really Salesforce&rdquo;
+        provable rather than just claimed.</p>
+      </div>
+      <div class="scroll-x">
+        <table>
+          <thead><tr><th>Supplier</th><th>Onboarding state</th><th>Why it is in the set</th></tr></thead>
+          <tbody>
+            <tr><td>Meridian Cleaning &amp; Technical</td><td><span class="chip chip-ok">ready</span></td><td>The happy path. All four prerequisites met, so <strong>Create Contract</strong> appears.</td></tr>
+            <tr><td>Ferrow Pest Control</td><td><span class="chip chip-gap">blocked</span></td><td>Insurance and sanctions screening outstanding. Proves the gate is real &mdash; the link is replaced by &ldquo;Onboarding incomplete&rdquo;.</td></tr>
+            <tr><td>Calder Mechanical &amp; Electrical</td><td><span class="chip chip-ok">ready</span></td><td>£1.24m, over every approval threshold. Use this one to demo escalation.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose"><p>Safe to run again any time &mdash; it clears its own three records first and touches nothing else.</p></div>
+    </div>
+  </div>
+
+  <!-- 7 -->
+  <div class="stp">
+    <div class="stp-n">7</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-org">in the browser</span><span class="eyebrow">5 min &mdash; worth doing</span></div>
+        <h2>Go and look at what you built</h2>
+      </div>
+      <div class="prose"><p>Do not skip this. You need to know your way around these screens for the demo, and it confirms steps 4&ndash;6 really worked.</p></div>
+      <ol class="clicks">
+        <li>Open your org: <code>sf org open --target-org clmdemo</code> &mdash; or just use the browser tab you already have.</li>
+        <li>Click the <strong>App Launcher</strong>: the grid of nine dots at the <strong>top-left</strong>.</li>
+        <li>Type <em>Supplier Onboarding</em> in the search box and click it.</li>
+        <li>You land on a list view. If it says <em>Recently Viewed</em> and looks empty, change the dropdown above the list to <span class="ui">All</span>. Your three records appear.</li>
+        <li>Click the Meridian one. You are looking at the record page: all twenty fields, and at the bottom a field labelled <strong>Create Contract</strong> showing a blue link.</li>
+        <li>Now open the <strong>Ferrow</strong> record. Same field, but it reads <em>Onboarding incomplete</em> &mdash; because two of its checkboxes are unticked. <strong>That is the §6.1 gate working.</strong></li>
+      </ol>
+      <div class="note ok col">
+        <span class="note-h">Try this, it makes the gate obvious.</span>
+        <p>On the Ferrow record, click <span class="ui">Edit</span>, tick <strong>Insurance Verified</strong> and
+        <strong>Sanctions Cleared</strong>, set <strong>Onboarding Status</strong> to <em>Approved - Ready to
+        Contract</em>, and <span class="ui">Save</span>. The Create Contract link appears immediately. Untick one and
+        it vanishes again. Nothing is scheduled or recalculated &mdash; a formula field is computed every time the
+        page is drawn.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8 -->
+  <div class="stp">
+    <div class="stp-n">8</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-clm">in your terminal</span><span class="eyebrow">1 min</span></div>
+        <h2>Get the two values the CLM needs</h2>
+      </div>
+      <div class="prose">
+        <p>The deploy in step 4 also created a <strong>Connected App</strong> called <em>FM CLM Demo</em>: the thing
+        that lets the CLM sign in through the org&rsquo;s own login page and come back with a refresh token, so nobody
+        pastes anything and a 401 is handled rather than seen. The CLM needs the org&rsquo;s address and the
+        app&rsquo;s consumer key.</p>
+      </div>
+      <pre class="term"><span class="cm"># 1. the org's address</span>
+sf org display --target-org clmdemo --verbose
+<span class="out">  Instance Url   https://orgfarm-a1b2c3-dev-ed.develop.my.salesforce.com</span>
+
+<span class="cm"># 2. the consumer key: Salesforce generated it, so read it back out of the org.
+#    (The UI route -- Manage Consumer Details -- emails you a verification code first.)</span>
+sf project retrieve start --metadata ConnectedApp:FM_CLM_Demo --target-org clmdemo
+grep consumerKey force-app/main/default/connectedApps/FM_CLM_Demo.connectedApp-meta.xml
+<span class="out">  &lt;consumerKey&gt;3MVG9HtWXcDG…&lt;/consumerKey&gt;</span></pre>
+      <div class="note col">
+        <span class="note-h">Neither value is a secret.</span>
+        <p>The consumer key belongs to a <em>public client</em>: the app uses PKCE instead of a client secret, because
+        a browser cannot keep a secret and pretending otherwise is worse than not having one. The key is in the page
+        by design.</p>
+      </div>
+      <div class="note col">
+        <span class="note-h">Give the Connected App ten minutes.</span>
+        <p>Salesforce takes up to ten minutes after creation before a new app can sign anyone in. Until then the login
+        page answers <code>invalid_client_id</code>. It is not a configuration mistake; wait and try again.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9 -->
+  <div class="stp">
+    <div class="stp-n">9</div>
+    <div class="stp-b">
+      <div class="stp-h">
+        <div class="stp-meta"><span class="chip chip-clm">in the CLM</span><span class="eyebrow">5 min</span></div>
+        <h2>Point the CLM at your org</h2>
+      </div>
+      <ol class="clicks">
+        <li>In the project root (not the <code>salesforce</code> folder), create a file called <code>.env</code>
+        with both values from step 8 (there is a <code>.env.example</code> showing the shape):
+          <pre style="margin-top:.5rem;">VITE_SALESFORCE_URL=https://orgfarm-a1b2c3-dev-ed.develop.my.salesforce.com
+VITE_SF_CLIENT_ID=3MVG9HtWXcDG…</pre>
+        </li>
+        <li><strong>Stop and restart <code>npm run dev</code>.</strong> Vite only reads <code>.env</code> at startup, so a running server will ignore it.</li>
+        <li>In the CLM, click <span class="ui">Salesforce &nearr;</span> in the top bar, then open <strong>Integration settings</strong>.</li>
+        <li>Set <strong>Mode</strong> to <span class="ui">live</span>.</li>
+        <li>Leave <strong>Instance URL</strong> as <code>/salesforce</code>. That is not a mistake &mdash; it is the dev-server proxy path, and the proxy is what forwards your calls to the address in <code>.env</code>.</li>
+        <li><strong>Authentication</strong> should already read <em>Sign in with Salesforce</em>, with the consumer key
+        and login URL pre-filled from <code>.env</code>. Click <span class="ui">Connect to Salesforce</span>.</li>
+        <li>The org&rsquo;s login page opens. Sign in. A page asks whether to allow <em>FM CLM Demo</em> access:
+        <span class="ui">Allow</span>. You are sent back to the CLM, which now shows <strong>Connected</strong> and
+        your name.</li>
+        <li><strong>Supplier object</strong> already reads <code>Supplier_Onboarding__c</code>; leave it.</li>
+        <li>Click <span class="ui">Test connection</span>. Success looks like
+        <em>&ldquo;Connected. Daily API requests: 14,987 of 15,000 remaining.&rdquo;</em></li>
+      </ol>
+      <div class="note col">
+        <span class="note-h">If you would rather not sign in.</span>
+        <p>Switch Authentication to <em>Paste a session token</em> and use the Access Token from
+        <code>sf org display --verbose</code>. It works identically and expires within hours; the CLM reports a 401
+        when it does, and you paste a fresh one. Fine for building. The OAuth route is for demoing.</p>
+      </div>
+
+      <div class="note ok col">
+        <span class="note-h">The CLM code is done.</span>
+        <p>The live query now reads all twenty onboarding fields and reaches the supplier through
+        <code>Account__r</code>, the four checkboxes drive the eligibility gate, the <code>#sf</code> link opens a
+        pre-filled draft, and every status change writes a <code>CLM_Contract__c</code> record. All of it is verified
+        against a stubbed org, so the only thing your token adds is the real network.</p>
+      </div>
+
+      <div class="prose">
+        <p>Once <span class="ui">Test connection</span> succeeds, the supplier list shows your three real records with
+        <strong>Ferrow marked blocked</strong> &mdash; that is the eligibility gate reading live checkboxes. Then go
+        back to Salesforce, open the Meridian onboarding record, and click <strong>Create Contract</strong>. The CLM
+        opens with the draft studio pre-filled from the org.</p>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- TROUBLESHOOTING -->
+<section>
+  <div class="sec-head">
+    <h2>When it goes wrong</h2>
+    <p class="col" style="color:var(--ink-2);">The errors you are most likely to hit, in the words Salesforce uses for them.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>What you see</th><th>What it means</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td class="k">sf: command not found</td><td>PATH has not picked up the new install</td><td>Close the terminal, open a new one</td></tr>
+        <tr><td class="k">No authorization information found</td><td>You are not in the <code>salesforce</code> folder, or the alias is wrong</td><td><code>cd salesforce</code>, and check <code>sf org list</code></td></tr>
+        <tr><td class="k">INVALID_FIELD: No such column</td><td>A field did not deploy, or the permission set is not assigned</td><td>Re-run step 4, then step 5</td></tr>
+        <tr><td class="k">INVALID_SESSION_ID / 401</td><td>In token mode: expired. In OAuth mode this is handled automatically</td><td>Token mode: re-run step 8. OAuth: Disconnect and Connect again</td></tr>
+        <tr><td class="k">invalid_client_id on the login page</td><td>Connected App not propagated yet, or wrong key in <code>.env</code></td><td>Wait ten minutes; compare the key to the retrieved file</td></tr>
+        <tr><td class="k">redirect_uri_mismatch</td><td>The app&rsquo;s callback list lacks what the CLM sent</td><td>It ships with <code>http://localhost:5173/</code> and the Pages URL; a different port needs adding</td></tr>
+        <tr><td class="k">Sign-in state did not match</td><td>Login started in a different tab, or the page reloaded mid-flow</td><td>Click Connect again from the same tab</td></tr>
+        <tr><td class="k">Fields appear blank on screen</td><td>Permission set not assigned</td><td>Step 5</td></tr>
+        <tr><td class="k">List view looks empty</td><td>It is filtered to <em>Recently Viewed</em></td><td>Switch the dropdown to <span class="ui">All</span></td></tr>
+        <tr><td class="k">CORS / blocked by policy</td><td>You are running the deployed site, not <code>npm run dev</code></td><td>Use dev for now. Setup &rarr; CORS to allowlist a deployed origin.</td></tr>
+        <tr><td class="k">Deploy: duplicate value found</td><td>You deployed once already</td><td>Harmless &mdash; deploys are idempotent. Re-run.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- REMAINING -->
+<section>
+  <div class="sec-head">
+    <h2>What the CLM now does</h2>
+    <p class="col" style="color:var(--ink-2);">Written and verified against a stubbed org. Nothing here waits on you.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>Behaviour</th><th>Where</th><th>Why it matters</th></tr></thead>
+      <tbody>
+        <tr><td>Queries all twenty onboarding fields, reaching the supplier through <code>Account__r</code></td><td class="k">lib/salesforce.js</td><td>Live suppliers arrive with full commercial context</td></tr>
+        <tr><td><code>flattenOnboarding()</code> collapses the nested shape at the boundary</td><td class="k">lib/salesforce.js</td><td>The rest of the app never learns which object onboarding lives on</td></tr>
+        <tr><td>The four checkboxes become <code>prereqs</code></td><td class="k">lib/salesforce.js</td><td>The gate runs on live data. <em>Ferrow is refused, naming both missing items.</em></td></tr>
+        <tr><td><code>getOnboarding()</code> resolves one record by id</td><td class="k">lib/salesforce.js</td><td>What the Create Contract link needs</td></tr>
+        <tr><td>Reads <code>#sf?onb=…&amp;acct=…</code> and opens a pre-filled draft</td><td class="k">App.jsx</td><td>Salesforce becomes the trigger, not the CLM</td></tr>
+        <tr><td>Re-runs the gate on arrival, and says which prerequisites failed</td><td class="k">App.jsx + SalesforcePanel</td><td>A link can be stale or pasted, so the gate holds on this side too</td></tr>
+        <tr><td><code>upsertContract()</code> writes <code>CLM_Contract__c</code> by external id</td><td class="k">lib/salesforce.js</td><td>Idempotent: the sync effect can fire twice and nothing duplicates</td></tr>
+        <tr><td>PO eligibility set true only at Executed or Active</td><td class="k">lib/salesforce.js</td><td>§6.10, and the one field procurement actually reads</td></tr>
+        <tr><td>Signs in through the org with OAuth 2.0 + PKCE, as a public client</td><td class="k">lib/sfauth.js</td><td>A refresh token, so the connection renews itself and survives a reload</td></tr>
+        <tr><td>On a 401, refreshes once and retries once</td><td class="k">lib/salesforce.js</td><td>The expiry nobody sees. A second 401 on a fresh token is a real refusal and is reported</td></tr>
+        <tr><td>A Create Contract link with no sign-in starts one, and resumes the link afterwards</td><td class="k">App.jsx</td><td>The normal first visit from Salesforce, without a dead end</td></tr>
+        <tr><td>Disconnect revokes the refresh token at the org</td><td class="k">lib/sfauth.js</td><td>Signing out means the org forgets too, not only this browser</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note ok col">
+    <span class="note-h">Proved before the token exists.</span>
+    <p>Driven against a stubbed Salesforce: the list gates Ferrow on two missing prerequisites, the deep link resolves
+    and populates <strong>12 of 12</strong> merge fields, and PO eligibility stays <em>No</em> through Draft, In
+    Negotiation and Ready for Signature before flipping to <em>Yes</em> at Executed. The contract record carries both
+    parents. <strong>559</strong> checks pass, including the RFC 7636 PKCE test vector and the 401-refresh-retry sequence.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Built against <em>Facilities Management AI-Powered Supplier CLM POC &mdash; Detailed Product &amp; Technical
+  Process Blueprint</em> v1.0, and the CLM demo at commit <code class="mono">d8ce4b1</code>.</p>
+  <p>Generated Salesforce metadata lives in <code class="mono">salesforce/</code>; re-run
+  <code class="mono">salesforce/generate-metadata.py</code> from the project root if you need to change a field.</p>
+</footer>
+
+</div>
+</body>
+</html>
